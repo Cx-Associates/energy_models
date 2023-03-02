@@ -50,48 +50,6 @@ def balance_point_transform(series, temp):
     return series.apply(lambda x: np.amax([x - temp, 0]) + temp)
 
 
-def add_TOWT_features(df, n_bins=6):
-    """Based on LBNL-4944E: Time of Week & Temperature Model outlined in Quantifying Changes in Building Electricity Use
-    ... (2011, Mathieu et al). Given a time-series dataframe with outdoor air temperature column 'temp, this function
-    returns dataframe with 168 columns with boolean (0 or 1) for each hour of the week, plus 6 binned temperature
-    columns. Each column is intended to be a feature or independent variable an ordinary least squares regression
-    model to determine hourly energy usage as a function of time of week and temperature.
-
-    @param df: (pandas.DataFrame) must have datetime index and at least column 'temp'
-    @param n_bins: (int) number of temperature bins. Per LBNL recommendation, default is 6.
-    @return: (pandas.DataFrame) augmented with features as new columns. original temperature column is dropped.
-    """
-    # add time of week features
-    TOW = df.index.weekday * 24 + df.index.hour
-    TOWdf = pd.DataFrame(0, columns=TOW.unique(), index=df.index)
-    for index, row in TOWdf.iterrows():
-        tow = index.weekday() * 24 + index.hour
-        TOWdf[tow].loc[index] = 1
-    labels = ['h' + str(x) for x in TOWdf.columns]
-    TOWdf.columns = labels
-    df = df.join(TOWdf)
-    df.dropna(inplace=True)
-
-    # break temp into bins
-    min_temp, max_temp = np.floor(df['temp'].min()), np.ceil(df['temp'].max())
-    bin_size = (max_temp - min_temp) / (n_bins)
-    bins = np.arange(min_temp, max_temp, bin_size)
-    bins = list(np.append(bins, max_temp))
-    labels = np.arange(1, n_bins + 1)
-    labels_index = [np.int(x - 1) for x in labels]
-    labels = ['t' + str(x) for x in labels]
-    df['temp_bin'] = pd.cut(df['temp'], bins, labels=labels_index)
-    temp_df = pd.DataFrame(columns=labels_index, index=df.index)
-    for index, row in df.iterrows():
-        colname = np.int(row['temp_bin'])
-        bin_bottom = bins[colname]
-        temp_df[colname].loc[index] = row['temp'] - bin_bottom #ToDo: revisit with normalizing
-    temp_df.fillna(0, inplace=True)
-    temp_df.columns = labels
-    joined_df = pd.concat([df.drop(columns=['temp', 'temp_bin']), temp_df], axis=1)
-    return joined_df
-
-
 class Dataset:
     """Generic dataset class comprising an energy time-series and a weather time-series.
 
@@ -100,10 +58,12 @@ class Dataset:
 
     def __init__(
             self,
-            energy_filepath=None,
-            weather_filepath=None,
-            df=None
+            # energy_filepath=None,
+            # weather_filepath=None,
+            df=None,
+            *args, **kwargs
     ):
+        self.__dict__ = kwargs.copy()
         self.name = None
         self.energy_series = None
         self.temperature_series = None
@@ -116,17 +76,17 @@ class Dataset:
         if df is not None:
             pass
         else:
-            df = pd.read_csv(energy_filepath, index_col=[0], parse_dates=True)
-            # s_energy = df['kWh'].resample('h').mean()
-            # ToDo: write function to auto-recognize frequency. instead, resampling to hourly below regardless
-            s_energy = df['kWh']
+            df = pd.read_csv(self.energy_filepath, index_col=[0], parse_dates=True)
+            # ToDo: write function to auto-recognize frequency. instead, resampling below df to hourly regardless
+            s_energy = df['kWh'] #ToDo: handle differently if kW or kWh as far as resampling
             self.energy_series = s_energy.dropna()
 
             try:
-                df = read_weather_data(weather_filepath, 'temp')
-                s_temp = df['temp']
+                df = read_weather_data(self.weather_filepath, 'temp')
+                s_temp = df['temp'] #ToDo: change naming convention to 'temp' not weather, and then have this
+                # selected column using .iloc
             except pd.errors.EmptyDataError: #ToDo: no idea why I'm getting this
-                df = pd.read_csv(weather_filepath, index_col=[0], parse_dates=True)
+                df = pd.read_csv(self.weather_filepath, index_col=[0], parse_dates=True)
                 df.columns = ['temp']
                 s_temp = df['temp']
 
@@ -161,11 +121,14 @@ class Modelset(Dataset):
 
     def __init__(self, *args, x='temperature', y='energy', **kwargs):
         try:
-            if type(args[0]) is Dataset:
-                self.__dict__ = args[0].__dict__.copy()
+            if args:
+                if type(args[0]) is Dataset:
+                    self.__dict__ = args[0].__dict__.copy()
+            # elif type(args[0]) is dict:
+            #     self.__dict__ = args[0].copy()
             else: #ToDo: clean this up; it is redundant with else clause a few lines below
                 super().__init__(
-                    **kwargs
+                    *args, **kwargs
                 )
         except IndexError:
             # super().__init__(
@@ -175,17 +138,19 @@ class Modelset(Dataset):
             super().__init__(
                 **kwargs
             )
-        self.baseline_start = None
-        self.baseline_end = None
-        self.bp_heating = None
-        self.bp_cooling = None
-        self.performance_start = None
-        self.performance_end = None
-        self.X = None
-        self.X_train = None
-        self.X_test = None
-        self.X_pred = None
-        self.X_norm = None
+        # self.baseline_start = None
+        # self.baseline_end = None
+        # self.train_start = None
+        # self.train_end = None
+        # self.bp_heating = None
+        # self.bp_cooling = None
+        # self.performance_start = None
+        # self.performance_end = None
+        self.x = None
+        self.x_train = None
+        self.x_test = None
+        self.x_pred = None
+        self.x_norm = None
         self.Y = None
         self.Y_train = None
         self.Y_test = None
@@ -205,34 +170,27 @@ class Modelset(Dataset):
         self.fsu = None
 
         if x == 'temperature':
-            self.X = pd.DataFrame(self.temperature_series)
+            #ToDo: why make x a df here and keep y as a series?
+            self.x = pd.DataFrame(self.temperature_series)
         if y == 'energy':
             self.Y = self.energy_series
+        self.truncate_baseline()
 
     def set_balance_point(self, cooling=None, heating=None):
-        s = balance_point_transform(self.X['temp'], cooling)
-        self.X_train = self.X.copy()
-        self.X_train['temp_bp'] = s
-        self.X_test['temp_bp'] = s
+        s = balance_point_transform(self.x['temp'], cooling)
+        self.x_train = self.x.copy()
+        self.x_train['temp_bp'] = s
+        self.x_test['temp_bp'] = s
 
     def clear_balance_points(self):
-        if 'temp_bp' in self.X.columns:
-            self.X.drop(columns='temp_bp', inplace=True)
+        if 'temp_bp' in self.x.columns:
+            self.x.drop(columns='temp_bp', inplace=True)
         try:
-            if 'temp_bp' in self.X_train.columns:
-                self.X_train.drop(columns='temp_bp', inplace=True)
+            if 'temp_bp' in self.x_train.columns:
+                self.x_train.drop(columns='temp_bp', inplace=True)
         except AttributeError:
             pass
         self.bp_cooling = None
-
-    def truncate_baseline(self, before=None, after=None):
-        #ToDo: must happen before train_test_split, right?
-        X_train = self.X.truncate(before=before, after=after)
-        Y_train = self.Y.truncate(before=before, after=after)
-        self.X_train = X_train
-        self.X_test = X_train
-        self.Y_train = Y_train
-        self.Y_test = Y_train
 
     def score(self):
         """
@@ -292,11 +250,12 @@ class TOWT(Modelset):
     #ToDo: add interactive number of temp coefficients (LBNL suggests 6).
     def __init__(self, *args, **kwargs):
         try:
-            if type(args[0]) is Modelset:
-                self.__dict__ = args[0].__dict__.copy()
+            if args:
+                if type(args[0]) is Modelset:
+                    self.__dict__ = args[0].__dict__.copy()
             else: #ToDo: clean this up; it is redundant with else clause a few lines below
                 super().__init__(
-                    **kwargs
+                    *args, **kwargs
                 )
         except IndexError:
             # super().__init__(
@@ -306,8 +265,8 @@ class TOWT(Modelset):
             super().__init__(
                 **kwargs
             )
-        self.X_train, self.X_test = self.X.copy(), self.X.copy()
-        self.Y_train, self.Y_test = self.Y.copy(), self.Y.copy()
+        # self.x_train, self.x_test = self.x.copy(), self.x.copy()
+        # self.Y_train, self.Y_test = self.Y.copy(), self.Y.copy()
         self.type = 'towt'
 
     def bin_temps(self, num=6):
@@ -318,50 +277,106 @@ class TOWT(Modelset):
         """
         pass
 
+    def add_TOWT_features(self, df, bins=6):
+        """Based on LBNL-4944E: Time of Week & Temperature Model outlined in Quantifying Changes in Building Electricity Use
+        ... (2011, Mathieu et al). Given a time-series dataframe with outdoor air temperature column 'temp, this function
+        returns dataframe with 168 columns with boolean (0 or 1) for each hour of the week, plus 6 binned temperature
+        columns. Each column is intended to be a feature or independent variable an ordinary least squares regression
+        model to determine hourly energy usage as a function of time of week and temperature.
+
+        @param df: (pandas.DataFrame) must have datetime index and at least column 'temp'
+        @param n_bins: (int) number of temperature bins. Per LBNL recommendation, default is 6.
+        @return: (pandas.DataFrame) augmented with features as new columns. original temperature column is dropped.
+        """
+        # add time of week features
+        TOW = df.index.weekday * 24 + df.index.hour
+        TOWdf = pd.DataFrame(0, columns=TOW.unique(), index=df.index)
+        for index, row in TOWdf.iterrows():
+            tow = index.weekday() * 24 + index.hour
+            TOWdf[tow].loc[index] = 1
+        labels = ['h' + str(x) for x in TOWdf.columns]
+        TOWdf.columns = labels
+        df = df.join(TOWdf)
+        df.dropna(inplace=True)
+
+        # break temp into bins
+        if type(bins) == np.int:
+            n_bins = bins
+            min_temp, max_temp = np.floor(df['temp'].min()), np.ceil(df['temp'].max())
+            bin_size = (max_temp - min_temp) / (n_bins)
+            bins = np.arange(min_temp, max_temp, bin_size)
+            bins = list(np.append(bins, max_temp))
+            labels = np.arange(1, n_bins + 1)
+            labels_index = [np.int(x - 1) for x in labels]
+            labels = ['t' + str(x) for x in labels]
+            df['temp_bin'] = pd.cut(df['temp'], bins, labels=labels_index)
+        elif bins == 'from train':
+            pass
+            #ToDo: inspect self.x_train here. 1) do the variables need to be normalized and standardized?
+            #ToDo: regardless, need to get the bin edges somehow
+        temp_df = pd.DataFrame(columns=labels_index, index=df.index)
+        for index, row in df.iterrows():
+            colname = np.int(row['temp_bin'])
+            bin_bottom = bins[colname]
+            temp_df[colname].loc[index] = row['temp'] - bin_bottom  # ToDo: revisit with normalizing
+        temp_df.fillna(0, inplace=True)
+        temp_df.columns = labels
+        joined_df = pd.concat([df.drop(columns=['temp', 'temp_bin']), temp_df], axis=1)
+        return joined_df
+
+    def truncate_baseline(self, before=None, after=None):
+        """This is listed under the TOWT class here because not all models will use train and test sets as identical. Many model types should not.
+
+        :param before:
+        :param after:
+        :return:
+        """
+        #ToDo: must happen before train_test_split, right?
+        if before is None:
+            before = self.train_start
+        if after is None:
+            after = self.train_end
+        x_train = self.x.truncate(before=before, after=after)
+        Y_train = self.Y.truncate(before=before, after=after)
+        self.x_train = x_train
+        self.x_test = x_train
+        self.Y_train = Y_train
+        self.Y_test = Y_train
+
     def run(self, on='train', start=None, end=None):
-        #ToDo: badly needs refacotring and rethikning on if the reindex is even necessary
+        x, bins = None, None
         if on == 'train':
-            X, Y = self.X_train, self.Y_train
-            # Y.dropna(inplace=True)
-            # X = X.reindex(Y.index)
-            # X.dropna(inplace=True)
-            # Y = Y.reindex(X.index)
+            x, Y = self.x_train, self.Y_train
+            bins = 6
         elif on == 'test':
-            X, Y = self.X_test, self.Y_test
-            # Y.dropna(inplace=True)
-            # X = X.reindex(Y.index)
-            # X.dropna(inplace=True)
-            # Y = Y.reindex(X.index)
+            x, Y = self.x_test, self.Y_test
+            bins = 'from train'
         elif on == 'predict': #ToDo: add hard stop so you cannot cast prediction onto baseline period
-            X = self.X.truncate(start, end)
+            x = self.x.truncate(start, end)
             Y = self.Y.truncate(start, end)
-            # Y.dropna(inplace=True)
-            # X = X.reindex(Y.index)
-            # X.dropna(inplace=True)
-            # Y = Y.reindex(X.index)
+            bins = 'from train'
         elif on == 'normalize':
-            X = self.X_norm
-        X = add_TOWT_features(X)
+            x = self.x_norm
+            bins = 'from train'
+        x = self.add_TOWT_features(x, bins=bins)
         if on in {'test', 'predict'}:
-            X = X[self.X_train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
-        if self.bp_cooling is not None:
-            X['temp'] = X.pop('temp_bp')
+            x = x[self.x_train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
         if on == 'train':
-            reg = LinearRegression().fit(X, Y)
+            reg = LinearRegression().fit(x, Y)
         else:
             reg = self.reg
         #ToDO: below won't work without add_TOW features first eh? maybe do some error catching
         #ToDo: also add exception or notification for truncating baseline
-        y = reg.predict(X)
+        y = reg.predict(x)
         # y = pd.DataFrame(y, index=X.index, columns=['predicted'])
-        y = pd.Series(y, index=X.index, name='kW modeled')
+        y = pd.Series(y, index=x.index, name='kW modeled')
         if on == 'train':
-            self.X_train, self.y_train, self.Y_train = X, y, Y
+            self.x_train, self.y_train, self.Y_train = x, y, Y
             self.reg = reg
         elif on == 'test':
-            self.X_test, self.y_test, self.Y_test = X, y, Y
+            self.x_test, self.y_test, self.Y_test = x, y, Y
         elif on == 'predict':
-            self.X_pred, self.y_pred, self.Y_pred = X, y, Y
+            self.X_pred, self.y_pred, self.Y_pred = x, y, Y
             self.kWh_performance_actual = Y.sum()
             self.kWh_performance_pred = y.sum()
             self.energy_savings = self.kWh_performance_pred - self.kWh_performance_actual
