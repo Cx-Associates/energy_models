@@ -318,7 +318,7 @@ class TOWT(Modelset):
             #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
             bin_size = (max_temp - min_temp) / (n_bins)
             temp_bins = np.arange(min_temp, max_temp, bin_size)
-            temp_bins = list(np.append(bins, max_temp))
+            temp_bins = list(np.append(temp_bins, max_temp))
             labels, labels_index = self.TOWT_column_labels(n_bins)
             df['temp_bin'] = pd.cut(df['temp'], bins, labels=labels_index)
             self.temp_bins = temp_bins
@@ -331,15 +331,15 @@ class TOWT(Modelset):
             min_temp, max_temp = np.floor(df['temp'].min()), np.ceil(df['temp'].max())
             #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
             temp_bins[0], temp_bins[-1] = min_temp, max_temp
-            df['temp_bin'] = pd.cut(df['temp'], [temp_bins])
+            df['temp_bin'] = pd.cut(df['temp'], temp_bins, labels=labels_index)
         temp_df = pd.DataFrame(columns=labels_index, index=df.index)
         for index, row in df.iterrows():
             colname = np.int(row['temp_bin'])
             bin_bottom = temp_bins[colname]
             temp_df[colname].loc[index] = row['temp'] - bin_bottom
-        if bins == 'from_train':
-            adj_factor = 0 #ToDo: mid-dev
-            temp_df['t1'] = 0 #ToDo: mid-dev
+        if bins == 'from train':
+            adj_amt = old_min_temp - min_temp
+            temp_df[0] -= adj_amt
 
         temp_df.fillna(0, inplace=True)
         temp_df.columns = labels
