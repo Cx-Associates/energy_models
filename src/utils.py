@@ -118,7 +118,6 @@ class Modelset(Dataset):
     """A child class of DataSet with attributes to use in modeling.
 
     """
-
     def __init__(self, *args, x='temperature', y='energy', **kwargs):
         try:
             if args:
@@ -174,7 +173,7 @@ class Modelset(Dataset):
             self.x = pd.DataFrame(self.temperature_series)
         if y == 'energy':
             self.Y = self.energy_series
-        self.truncate_baseline()
+        # self.truncate_baseline() #ToDo: moved this over to TOWT.__init__(), delete line if all's good
 
     def set_balance_point(self, cooling=None, heating=None):
         s = balance_point_transform(self.x['temp'], cooling)
@@ -269,6 +268,7 @@ class TOWT(Modelset):
         # self.Y_train, self.Y_test = self.Y.copy(), self.Y.copy()
         self.type = 'towt'
         self.temp_bins = None
+        self.truncate_baseline()
 
     def bin_temps(self, num=6):
         """Per LBNL
@@ -328,9 +328,9 @@ class TOWT(Modelset):
             n_bins = len(temp_bins) - 1
             labels, labels_index = self.TOWT_column_labels(n_bins)
             old_min_temp, old_max_temp = temp_bins[0], temp_bins[-1]
-            min_temp, max_temp = np.floor(df['temp'].min()), np.ceil(df['temp'].max())
+            min_temp = np.floor(df['temp'].min())
             #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
-            temp_bins[0], temp_bins[-1] = min_temp, max_temp
+            temp_bins[0] = min_temp
             df['temp_bin'] = pd.cut(df['temp'], temp_bins, labels=labels_index)
         temp_df = pd.DataFrame(columns=labels_index, index=df.index)
         for index, row in df.iterrows():
