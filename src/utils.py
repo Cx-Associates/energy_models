@@ -268,6 +268,7 @@ class TOWT(Modelset):
         # self.x_train, self.x_test = self.x.copy(), self.x.copy()
         # self.Y_train, self.Y_test = self.Y.copy(), self.Y.copy()
         self.type = 'towt'
+        self.temp_bins = None
 
     def bin_temps(self, num=6):
         """Per LBNL
@@ -276,6 +277,17 @@ class TOWT(Modelset):
         @return:
         """
         pass
+
+    def TOWT_column_labels(self, n_bins):
+        """helper function
+
+        :param n_bins:
+        :return:
+        """
+        labels = np.arange(1, n_bins + 1)
+        labels_index = [np.int(x - 1) for x in labels]
+        labels = ['t' + str(x) for x in labels]
+        return labels, labels_index
 
     def add_TOWT_features(self, df, bins=6):
         """Based on LBNL-4944E: Time of Week & Temperature Model outlined in Quantifying Changes in Building Electricity Use
@@ -303,22 +315,32 @@ class TOWT(Modelset):
         if type(bins) == np.int:
             n_bins = bins
             min_temp, max_temp = np.floor(df['temp'].min()), np.ceil(df['temp'].max())
+            #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
             bin_size = (max_temp - min_temp) / (n_bins)
-            bins = np.arange(min_temp, max_temp, bin_size)
-            bins = list(np.append(bins, max_temp))
-            labels = np.arange(1, n_bins + 1)
-            labels_index = [np.int(x - 1) for x in labels]
-            labels = ['t' + str(x) for x in labels]
+            temp_bins = np.arange(min_temp, max_temp, bin_size)
+            temp_bins = list(np.append(bins, max_temp))
+            labels, labels_index = self.TOWT_column_labels(n_bins)
             df['temp_bin'] = pd.cut(df['temp'], bins, labels=labels_index)
+            self.temp_bins = temp_bins
         elif bins == 'from train':
-            pass
-            #ToDo: inspect self.x_train here. 1) do the variables need to be normalized and standardized?
-            #ToDo: regardless, need to get the bin edges somehow
+            # This handles cases where the range of test data exceeds range of train data.
+            temp_bins = self.temp_bins
+            n_bins = len(temp_bins) - 1
+            labels, labels_index = self.TOWT_column_labels(n_bins)
+            old_min_temp, old_max_temp = temp_bins[0], temp_bins[-1]
+            min_temp, max_temp = np.floor(df['temp'].min()), np.ceil(df['temp'].max())
+            #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
+            temp_bins[0], temp_bins[-1] = min_temp, max_temp
+            df['temp_bin'] = pd.cut(df['temp'], [temp_bins])
         temp_df = pd.DataFrame(columns=labels_index, index=df.index)
         for index, row in df.iterrows():
             colname = np.int(row['temp_bin'])
-            bin_bottom = bins[colname]
-            temp_df[colname].loc[index] = row['temp'] - bin_bottom  # ToDo: revisit with normalizing
+            bin_bottom = temp_bins[colname]
+            temp_df[colname].loc[index] = row['temp'] - bin_bottom
+        if bins == 'from_train':
+            adj_factor = 0 #ToDo: mid-dev
+            temp_df['t1'] = 0 #ToDo: mid-dev
+
         temp_df.fillna(0, inplace=True)
         temp_df.columns = labels
         joined_df = pd.concat([df.drop(columns=['temp', 'temp_bin']), temp_df], axis=1)
