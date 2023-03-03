@@ -369,7 +369,7 @@ class TOWT(Modelset):
         x, bins = None, None
         if on == 'train':
             x, Y = self.x_train, self.Y_train
-            bins = 6
+            bins = 6 #ToDo: call this out
         elif on == 'test':
             x, Y = self.x_test, self.Y_test
             bins = 'from train'
@@ -398,6 +398,7 @@ class TOWT(Modelset):
         elif on == 'test':
             self.x_test, self.y_test, self.Y_test = x, y, Y
         elif on == 'predict':
+            #ToDo: refactor / break out under a new function called prediction metrics or something
             self.X_pred, self.y_pred, self.Y_pred = x, y, Y
             self.kWh_performance_actual = Y.sum()
             self.kWh_performance_pred = y.sum()
