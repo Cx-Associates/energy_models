@@ -262,13 +262,21 @@ class TOWT(Modelset):
             #     args[1]
             # )
             super().__init__(
-                **kwargs
+                *args, **kwargs
             )
         # self.x_train, self.x_test = self.x.copy(), self.x.copy()
         # self.Y_train, self.Y_test = self.Y.copy(), self.Y.copy()
         self.type = 'towt'
         self.temp_bins = None
-        self.truncate_baseline()
+        try:
+            self.truncate_baseline()
+        except AttributeError:
+            if 'df' in kwargs.keys():
+                df = kwargs['df']
+                self.train_start, self.train_end = df.index[0], df.index[-1]
+                self.truncate_baseline()
+            else:
+                raise('Because no trunacting arguments (train_start, train_end) were supplied, args[0] must be type df.')
 
     def bin_temps(self, num=6):
         """Per LBNL
@@ -332,7 +340,9 @@ class TOWT(Modelset):
             #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
             temp_bins[0] = min_temp
             df['temp_bin'] = pd.cut(df['temp'], temp_bins, labels=labels_index)
+            df.fillna(0, inplace=True)
         temp_df = pd.DataFrame(columns=labels_index, index=df.index)
+        import streamlit as st
         for index, row in df.iterrows():
             colname = np.int(row['temp_bin'])
             bin_bottom = temp_bins[colname]
@@ -392,6 +402,7 @@ class TOWT(Modelset):
         y = reg.predict(x)
         # y = pd.DataFrame(y, index=X.index, columns=['predicted'])
         y = pd.Series(y, index=x.index, name='kW modeled')
+        y[y < 0] = 0
         if on == 'train':
             self.x_train, self.y_train, self.Y_train = x, y, Y
             self.reg = reg
