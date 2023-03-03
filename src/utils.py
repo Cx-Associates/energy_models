@@ -391,7 +391,7 @@ class TOWT(Modelset):
             x = self.x_norm
             bins = 'from train'
         x = self.add_TOWT_features(x, bins=bins)
-        if on in {'test', 'predict'}:
+        if on in {'test', 'predict', 'normalize'}:
             x = x[self.x_train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
         if on == 'train':
             reg = LinearRegression().fit(x, Y)
