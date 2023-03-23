@@ -301,7 +301,7 @@ class TOWT(Modelset):
         """Based on LBNL-4944E: Time of Week & Temperature Model outlined in Quantifying Changes in Building Electricity Use
         ... (2011, Mathieu et al). Given a time-series dataframe with outdoor air temperature column 'temp, this function
         returns dataframe with 168 columns with boolean (0 or 1) for each hour of the week, plus 6 binned temperature
-        columns. Each column is intended to be a feature or independent variable an ordinary least squares regression
+        columns. Each column is intended to be a feature or independent variable of an ordinary least squares regression
         model to determine hourly energy usage as a function of time of week and temperature.
 
         @param df: (pandas.DataFrame) must have datetime index and at least column 'temp'
@@ -331,7 +331,7 @@ class TOWT(Modelset):
             df['temp_bin'] = pd.cut(df['temp'], bins, labels=labels_index)
             self.temp_bins = temp_bins
         elif bins == 'from train':
-            # This handles cases where the range of test data exceeds range of train data.
+            # This handles cases where the range of test data may exceed range of train data.
             temp_bins = self.temp_bins
             n_bins = len(temp_bins) - 1
             labels, labels_index = self.TOWT_column_labels(n_bins)
@@ -342,9 +342,11 @@ class TOWT(Modelset):
             df['temp_bin'] = pd.cut(df['temp'], temp_bins, labels=labels_index)
             df.fillna(0, inplace=True)
         temp_df = pd.DataFrame(columns=labels_index, index=df.index)
-        import streamlit as st
+        bin_deltas = list(np.array(temp_bins[1:]) - np.array(temp_bins[:-1]))
         for index, row in df.iterrows():
             colname = np.int(row['temp_bin'])
+            left_cols = list(np.arange(0, colname, 1))
+            temp_df[left_cols].loc[index] = 0 #ToDo -- insert bin deltas here.
             bin_bottom = temp_bins[colname]
             temp_df[colname].loc[index] = row['temp'] - bin_bottom
         if bins == 'from train':
