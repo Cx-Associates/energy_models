@@ -346,7 +346,10 @@ class TOWT(Modelset):
         for index, row in df.iterrows():
             colname = np.int(row['temp_bin'])
             left_cols = list(np.arange(0, colname, 1))
-            temp_df[left_cols].loc[index] = 0 #ToDo -- insert bin deltas here.
+            write_list = bin_deltas[:colname]
+            temp_row = temp_df.loc[index]
+            temp_row.loc[left_cols] = write_list
+            temp_df.loc[index] = temp_row
             bin_bottom = temp_bins[colname]
             temp_df[colname].loc[index] = row['temp'] - bin_bottom
         if bins == 'from train':

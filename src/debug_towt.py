@@ -26,7 +26,7 @@ model = TOWT(**config_parameters_dict)
 model.run('train')
 model.run('test')
 model.score()
-model.run('normalize')
+model.run('normalize') #ToDo: where does x_norm come from?
 
 model.run('predict', start='2017-11-01', end='2017-12-31')
 
