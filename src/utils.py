@@ -229,6 +229,7 @@ class Modelset(Dataset):
         self.cvrmse = None
         self.savings_uncertainty = None
         self.fsu = None
+        #ToDo: add x and y colnames, no?
 
         # if x == 'temperature':
         #     #ToDo: why make x a df here and keep y as a series?
@@ -621,11 +622,12 @@ class TreeTODT(Modelset):
         df[shifted_colname + '2'] = df[colname].shift(2)
         df[shifted_colname + '3'] = df[colname].shift(3)
         df[shifted_colname + '4'] = df[colname].shift(4)
-        df['diff1'] = df[colname] - df[shifted_colname]
-        df['diff2'] = df[shifted_colname] - df[shifted_colname + '2']
-        df['diff3'] = df[shifted_colname + '2'] - df[shifted_colname + '3']
-        df['diff4'] = df[shifted_colname + '3'] - df[shifted_colname + '4']
-        df[rolling_colname] = df[colname].rolling(6).mean()
+        df[shifted_colname + '5'] = df[colname].shift(5)
+        df['diff1'] = df[shifted_colname] - df[shifted_colname + '2']
+        df['diff2'] = df[shifted_colname + '2'] - df[shifted_colname + '3']
+        df['diff3'] = df[shifted_colname + '3'] - df[shifted_colname + '4']
+        df['diff4'] = df[shifted_colname + '4'] - df[shifted_colname + '5']
+        df[rolling_colname] = df[shifted_colname].rolling(6).mean()
         self.df_joined = df.copy()
         # drop nans resulting from the shifts in the x and Y properties only.
         df.dropna(inplace=True)
@@ -660,21 +662,23 @@ class TreeTODT(Modelset):
                 'diff4',
                 # 'HP_outdoor_rolling'
             ]
-        xa = self.x.drop(columns=tree_feature_colnames)
-        reg = LinearRegression().fit(xa, self.Y)
-        ya = reg.predict(xa)
-        ya = pd.DataFrame(ya, index=self.x.index)
-        xb = ya.join(self.x[tree_feature_colnames])
-        test_size = .5
-        # x_train, x_test, Y_train, Y_test = train_test_split(xb, self.Y, test_size=test_size)
-        # treereg = DecisionTreeRegressor().fit(x_train, self.Y_train)
-        gbreg = HistGradientBoostingRegressor().fit(xb, self.Y)
-        yb = gbreg.predict(xb)
-        self.reg = gbreg
-        self.reg_colnames = tree_feature_colnames
-        self.y_test = pd.DataFrame(yb, index=xb.index)
+        if run == 'train':
+            xa = self.x.drop(columns=tree_feature_colnames)
+            reg = LinearRegression().fit(xa, self.Y)
+            ya = reg.predict(xa)
+            ya = pd.DataFrame(ya, index=self.x.index)
+            xb = ya.join(self.x[tree_feature_colnames])
+            test_size = .5
+            # x_train, x_test, Y_train, Y_test = train_test_split(xb, self.Y, test_size=test_size)
+            # treereg = DecisionTreeRegressor().fit(x_train, self.Y_train)
+            gbreg = HistGradientBoostingRegressor().fit(xb, self.Y)
+            yb = gbreg.predict(xb)
+            self.reg = gbreg
+            self.reg_colnames = tree_feature_colnames
+            self.y_test = pd.DataFrame(yb, index=xb.index)
         if run == 'predict':
-            xa_future
+            Y_colname = 'HP_outdoor'
+            df_future = self.df_joined[pd.isnull(self.df_joined[Y_colname])]
 
     def gradient_boost(self):
         gb_feature_colnames = [
