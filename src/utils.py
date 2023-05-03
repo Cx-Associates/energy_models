@@ -46,7 +46,6 @@ def read_weather_data(filepath, colname, freq='h', irreg=False):
     df = df.resample(freq).mean()
     return df
 
-
 def balance_point_transform(series, temp):
     """
 
@@ -69,6 +68,36 @@ def TOWT_column_labels(n_bins):
     return labels, labels_index
 
 
+def get_projected_year(tmy, history, forecast=None):
+    '''
+
+    :param history:
+    :param forecast:
+    :param tmy:
+    :return:
+    '''
+    if isinstance(history, str):
+        df_history = pd.read_csv(history)
+    else:
+        df_history = history
+    if forecast is not None:
+        if isinstance(forecast, str):
+            df_forecast = pd.read_csv(forecast)
+    else:
+        df_forecast = forecast
+    if isinstance(tmy, str):
+        df_tmy = pd.read_csv(tmy)
+    else:
+        df_tmy = tmy
+    df = df_tmy
+    df[df.index == df_forecast.index] = df_forecast
+    df[df.index == df_history.index] = df_history
+
+    return df
+
+
+
+
 class Dataset:
     """Generic dataset class comprising an energy time-series and a weather time-series.
 
@@ -87,7 +116,7 @@ class Dataset:
         self.energy_series = None
         self.temperature_series = None
         self.normalized_temperature_series = None
-        self.joined_df = None
+        self.df_joined = None
         self.sparse_df = None
         self.display_start = None
         self.display_end = None
@@ -276,6 +305,7 @@ class Modelset(Dataset):
         pass
 
 
+
 class TOWT(Modelset):
     """Class for performing time-of-week-and-temperature regression and storing results as class attributes.
 
@@ -447,6 +477,10 @@ class TOWT(Modelset):
         elif on == 'normalize':
             self.y_norm = y
 
+    def predict_recursive(self, x=None, Y=None):
+        pass
+
+
 
 class SimpleOLS(Modelset):
     """
@@ -503,6 +537,7 @@ class TreeTODT(Modelset):
             )
         self.type = 'tree_todt'
         self.temp_bins = None
+        self.reg_colnames = None
 
     def TOWT_column_labels(self, n_bins):
         """helper function
@@ -515,7 +550,7 @@ class TreeTODT(Modelset):
         labels = ['t' + str(x) for x in labels]
         return labels, labels_index
 
-    def add_TODT_features(self, time_bins=144, look_back_hrs=1, temp_bins=6):
+    def add_TODT_features(self, df=None, time_bins=144, look_back_hrs=1, temp_bins=6):
         """Loosely based on LBNL TOWT model, except uses Decision Tree Regression rather than
 
         @param df: (pandas.DataFrame) must have datetime index and at least column 'temp'
@@ -523,7 +558,8 @@ class TreeTODT(Modelset):
         @return: (pandas.DataFrame) augmented with features as new columns. original temperature column is dropped.
         """
         # add time of day features
-        df = self.df_trimmed
+        if df is None:
+            df = self.df_trimmed
         df['TOD'] = df.index.hour
 
         # break temp into bins
@@ -545,10 +581,11 @@ class TreeTODT(Modelset):
             old_min_temp, old_max_temp = temp_bins[0], temp_bins[-1]
             min_temp = np.floor(df['temp'].min())
             # ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
-            temp_bins[0] = min_temp
+            # ToDo: the below line should only apply if the new bin min is LOWER than the old one.
+            # temp_bins[0] = min_temp
             labels, labels_index = self.TOWT_column_labels(n_bins)
             df['temp_bin'] = pd.cut(df['temp'], temp_bins, labels=labels_index)
-            df.fillna(0, inplace=True)
+            # df.fillna(0, inplace=True)
         temp_df = pd.DataFrame(columns=labels_index, index=df.index)
         bin_deltas = list(np.array(temp_bins[1:]) - np.array(temp_bins[:-1]))
         for index, row in df.iterrows():
@@ -560,20 +597,24 @@ class TreeTODT(Modelset):
             temp_df.loc[index] = temp_row
             bin_bottom = temp_bins[colname]
             temp_df[colname].loc[index] = row['temp'] - bin_bottom
+# ToDo: this doesn't get triggered because we overwrote temp_bins!
         if temp_bins == 'from train':
             adj_amt = old_min_temp - min_temp
             temp_df[0] -= adj_amt
         temp_df.fillna(0, inplace=True)
         temp_df.columns = labels
         joined_df = pd.concat([df.drop(columns=['temp', 'temp_bin']), temp_df], axis=1)
-        self.joined_df = joined_df
+        self.df_joined = joined_df
 
-    def add_shifted_features(self, colname):
+        return joined_df
+
+    def add_shifted_features(self, colname, df=None):
         '''
 
         :return:
         '''
-        df = self.joined_df
+        if df is None:
+            df = self.df_joined
         shifted_colname = colname + '_prior'
         rolling_colname = colname + '_rolling'
         df[shifted_colname] = df[colname].shift(1)
@@ -585,10 +626,13 @@ class TreeTODT(Modelset):
         df['diff3'] = df[shifted_colname + '2'] - df[shifted_colname + '3']
         df['diff4'] = df[shifted_colname + '3'] - df[shifted_colname + '4']
         df[rolling_colname] = df[colname].rolling(6).mean()
+        self.df_joined = df.copy()
+        # drop nans resulting from the shifts in the x and Y properties only.
         df.dropna(inplace=True)
-        self.joined_df = df
         self.x = df.drop(columns=colname)
         self.Y = df[colname]
+
+        return df
 
     def train_test_split(self):
         '''
@@ -599,39 +643,43 @@ class TreeTODT(Modelset):
         x_train, x_test, Y_train, Y_test = train_test_split(self.x, self.Y, test_size=test_size)
         self.x_train, self.x_test, self.Y_train, self.Y_test = x_train, x_test, Y_train, Y_test
 
-    def ensemble_tree(self):
+    def ensemble_tree(self, run='train', tree_feature_colnames=None):
         '''
 
         :return:
         '''
-        tree_feature_colnames = [
-            'TOD',
-            # 'HP_outdoor_prior',
-            # 'HP_outdoor_prior2',
-            # 'HP_outdoor_prior3',
-            'diff1',
-            'diff2',
-            'diff3',
-            'diff4',
-            # 'HP_outdoor_rolling'
-        ]
+        if tree_feature_colnames is None:
+            tree_feature_colnames = [
+                'TOD',
+                # 'HP_outdoor_prior',
+                # 'HP_outdoor_prior2',
+                # 'HP_outdoor_prior3',
+                'diff1',
+                'diff2',
+                'diff3',
+                'diff4',
+                # 'HP_outdoor_rolling'
+            ]
         xa = self.x.drop(columns=tree_feature_colnames)
         reg = LinearRegression().fit(xa, self.Y)
         ya = reg.predict(xa)
         ya = pd.DataFrame(ya, index=self.x.index)
         xb = ya.join(self.x[tree_feature_colnames])
         test_size = .5
-        x_train, x_test, Y_train, Y_test = train_test_split(xb, self.Y, test_size=test_size)
+        # x_train, x_test, Y_train, Y_test = train_test_split(xb, self.Y, test_size=test_size)
         # treereg = DecisionTreeRegressor().fit(x_train, self.Y_train)
         gbreg = HistGradientBoostingRegressor().fit(xb, self.Y)
         yb = gbreg.predict(xb)
         self.reg = gbreg
-        self.y_test = pd.DataFrame(yb, index=x_test.index)
+        self.reg_colnames = tree_feature_colnames
+        self.y_test = pd.DataFrame(yb, index=xb.index)
+        if run == 'predict':
+            xa_future
 
     def gradient_boost(self):
         gb_feature_colnames = [
             'TOD',
-            # 'HP_outdoor_prior',
+            'HP_outdoor_prior',
             'HP_outdoor_prior2',
             'HP_outdoor_prior3',
             'diff1',
@@ -641,7 +689,13 @@ class TreeTODT(Modelset):
             'HP_outdoor_rolling'
         ]
         x = self.x[gb_feature_colnames]
-        categorical_columns = ['TOD']
+        categorical_columns = [
+            'TOD',
+            # 'diff1',
+            # 'diff2',
+            # 'diff3',
+            # 'diff4'
+        ]
         ordinal_encoder = OrdinalEncoder()
         gbrt_pipeline = make_pipeline(
             ColumnTransformer(
