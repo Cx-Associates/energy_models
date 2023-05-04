@@ -524,6 +524,7 @@ class TreeTODT(Modelset):
 
     """
     def __init__(self, *args, **kwargs):
+        self.reg2_colnames = None
         self.reg1 = None
         self.reg2 = None
         try:
@@ -611,7 +612,7 @@ class TreeTODT(Modelset):
 
         return joined_df
 
-    def add_shifted_features(self, colname, df=None):
+    def add_shifted_features(self, colname, df=None, write_to_inst=True):
         '''
 
         :return:
@@ -630,11 +631,12 @@ class TreeTODT(Modelset):
         df['diff3'] = df[shifted_colname + '3'] - df[shifted_colname + '4']
         df['diff4'] = df[shifted_colname + '4'] - df[shifted_colname + '5']
         df[rolling_colname] = df[shifted_colname].rolling(6).mean()
-        self.df_joined = df.copy()
-        # drop nans resulting from the shifts in the x and Y properties only.
-        df.dropna(inplace=True)
-        self.x = df.drop(columns=colname)
-        self.Y = df[colname]
+        if write_to_inst == True:
+            self.df_joined = df.copy()
+            # drop nans resulting from the shifts in the x and Y properties only.
+            df.dropna(inplace=True)
+            self.x = df.drop(columns=colname)
+            self.Y = df[colname]
 
         return df
 
@@ -669,7 +671,7 @@ class TreeTODT(Modelset):
             reg = LinearRegression().fit(xa, self.Y)
             ya = reg.predict(xa)
             self.reg1 = reg
-            ya = pd.DataFrame(ya, index=self.x.index)
+            ya = pd.DataFrame(ya, index=self.x.index, columns=['linreg_prediction'])
             xb = ya.join(self.x[tree_feature_colnames])
             test_size = .5
             # x_train, x_test, Y_train, Y_test = train_test_split(xb, self.Y, test_size=test_size)
@@ -677,22 +679,30 @@ class TreeTODT(Modelset):
             gbreg = HistGradientBoostingRegressor().fit(xb, self.Y)
             yb = gbreg.predict(xb)
             self.reg2 = gbreg
-            self.reg_colnames = tree_feature_colnames
+            self.reg2_colnames = tree_feature_colnames + ['linreg_prediction']
         if run == 'predict':
             Y_colname = 'HP_outdoor'
-            df = self.df_joined[pd.isnull(self.df_joined[Y_colname])]
-            xa = df.drop(columns=tree_feature_colnames+[Y_colname])
+            # df = self.df_joined[pd.isnull(self.df_joined[Y_colname])]
+            df = self.df_joined
+            df_xa = df.drop(columns=tree_feature_colnames+[Y_colname])
             df[Y_colname + '_predicted'] = np.nan
-            for index, row in df.iterrows():
-                xa = np.array(xa.loc[index]).reshape(1, -1)
+            for index, row in df[pd.isnull(self.df_joined[Y_colname])].iterrows():
+                iindex = df.index.get_loc(index)
+                xa = np.array(df_xa.loc[index]).reshape(1, -1)
                 ya = self.reg1.predict(xa)
-                xb = ya.join(row.loc[tree_feature_colnames])
-                yb = self.reg2.predict(xb)
-                df[Y_colname + '_predicted'].iloc[index] = yb
-
-
-
-            return yb
+                xb_row = row[tree_feature_colnames]
+                xb_row['linreg_prediction'] = ya[0]
+                yb = self.reg2.predict(np.array(xb_row).reshape(1, -1))
+                df.loc[index, Y_colname] = yb[0]
+                df.loc[index, Y_colname + '_predicted'] = yb[0]
+                df_for_shifted = df[[Y_colname]].iloc[iindex-6:iindex+2]
+                df2 = self.add_shifted_features(Y_colname, df=df_for_shifted, write_to_inst=False)
+                new_row = df2.iloc[[-1]]
+                df_xa = df_xa.fillna(new_row)
+                df.fillna(df_xa, inplace=True)
+            yb = df[Y_colname]
+            self.y_pred = yb
+        return yb
 
     def gradient_boost(self):
         gb_feature_colnames = [
