@@ -630,7 +630,7 @@ class TreeTODT(Modelset):
         df['diff2'] = df[shifted_colname + '2'] - df[shifted_colname + '3']
         df['diff3'] = df[shifted_colname + '3'] - df[shifted_colname + '4']
         df['diff4'] = df[shifted_colname + '4'] - df[shifted_colname + '5']
-        df[rolling_colname] = df[shifted_colname].rolling(6).mean()
+        df[rolling_colname] = df[shifted_colname].rolling(12).mean()
         if write_to_inst == True:
             self.df_joined = df.copy()
             # drop nans resulting from the shifts in the x and Y properties only.
@@ -669,11 +669,12 @@ class TreeTODT(Modelset):
                 # 'HP_outdoor_prior',
                 # 'HP_outdoor_prior2',
                 # 'HP_outdoor_prior3',
+                # 'HP_outdoor_prior4',
                 # 'diff1',
                 # 'diff2',
                 # 'diff3',
                 # 'diff4',
-                # 'HP_outdoor_rolling'
+                'HP_outdoor_rolling'
             ]
         if run == 'train':
             xa = self.x[lin_feature_colnames]
