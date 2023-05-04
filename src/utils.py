@@ -683,7 +683,7 @@ class TreeTODT(Modelset):
         if run == 'predict':
             Y_colname = 'HP_outdoor'
             # df = self.df_joined[pd.isnull(self.df_joined[Y_colname])]
-            df = self.df_joined
+            df = self.df_joined.copy()
             df_xa = df.drop(columns=tree_feature_colnames+[Y_colname])
             df[Y_colname + '_predicted'] = np.nan
             for index, row in df[pd.isnull(self.df_joined[Y_colname])].iterrows():
@@ -701,6 +701,16 @@ class TreeTODT(Modelset):
                 df_xa = df_xa.fillna(new_row)
                 df.fillna(df_xa, inplace=True)
             yb = df[Y_colname]
+            # now predict the already known time slots
+            df_already = df.loc[pd.isnull(df[Y_colname + '_predicted'])]
+            xa = df_already.drop(columns=tree_feature_colnames + [Y_colname + '_predicted'] + [Y_colname])
+            xa.dropna(inplace=True)
+            ya = self.reg1.predict(xa)
+            ya = pd.DataFrame(ya, index=xa.index, columns=['linreg_prediction'])
+            xb = ya.join(df_already[tree_feature_colnames])
+            yb_already = self.reg2.predict(xb)
+            yb_already = pd.Series(yb_already, index=xb.index)
+            yb.update(yb_already)
             self.y_pred = yb
         return yb
 
