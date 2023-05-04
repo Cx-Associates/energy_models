@@ -524,6 +524,8 @@ class TreeTODT(Modelset):
 
     """
     def __init__(self, *args, **kwargs):
+        self.reg1 = None
+        self.reg2 = None
         try:
             if args:
                 if type(args[0]) is Modelset:
@@ -666,6 +668,7 @@ class TreeTODT(Modelset):
             xa = self.x.drop(columns=tree_feature_colnames)
             reg = LinearRegression().fit(xa, self.Y)
             ya = reg.predict(xa)
+            self.reg1 = reg
             ya = pd.DataFrame(ya, index=self.x.index)
             xb = ya.join(self.x[tree_feature_colnames])
             test_size = .5
@@ -673,12 +676,13 @@ class TreeTODT(Modelset):
             # treereg = DecisionTreeRegressor().fit(x_train, self.Y_train)
             gbreg = HistGradientBoostingRegressor().fit(xb, self.Y)
             yb = gbreg.predict(xb)
-            self.reg = gbreg
+            self.reg2 = gbreg
             self.reg_colnames = tree_feature_colnames
-            self.y_test = pd.DataFrame(yb, index=xb.index)
         if run == 'predict':
             Y_colname = 'HP_outdoor'
             df_future = self.df_joined[pd.isnull(self.df_joined[Y_colname])]
+
+            return yb
 
     def gradient_boost(self):
         gb_feature_colnames = [
@@ -740,19 +744,17 @@ class TreeTODT(Modelset):
         if on in {'test', 'predict', 'normalize'}:
             x = x[self.x_train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
         if on == 'train':
-            self.ensemble_tree()
+            y = self.ensemble_tree()
             # self.gradient_boost()
         else:
             reg = self.reg
-        #ToDO: below won't work without add_TOW features first eh? maybe do some error catching
-        #ToDo: also add exception or notification for truncating baseline
-        y = reg.predict(x)
+            y = reg.predict(x)
         # y = pd.DataFrame(y, index=X.index, columns=['predicted'])
         y = pd.Series(y, index=x.index, name='kW modeled')
         y[y < 0] = 0
         if on == 'train':
             self.x_train, self.y_train, self.Y_train = x, y, Y
-            self.reg = reg
+            # self.reg = reg
         elif on == 'test':
             self.x_test, self.y_test, self.Y_test = x, y, Y
         elif on == 'predict':
