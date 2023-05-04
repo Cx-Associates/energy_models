@@ -680,7 +680,17 @@ class TreeTODT(Modelset):
             self.reg_colnames = tree_feature_colnames
         if run == 'predict':
             Y_colname = 'HP_outdoor'
-            df_future = self.df_joined[pd.isnull(self.df_joined[Y_colname])]
+            df = self.df_joined[pd.isnull(self.df_joined[Y_colname])]
+            xa = df.drop(columns=tree_feature_colnames+[Y_colname])
+            df[Y_colname + '_predicted'] = np.nan
+            for index, row in df.iterrows():
+                xa = np.array(xa.loc[index]).reshape(1, -1)
+                ya = self.reg1.predict(xa)
+                xb = ya.join(row.loc[tree_feature_colnames])
+                yb = self.reg2.predict(xb)
+                df[Y_colname + '_predicted'].iloc[index] = yb
+
+
 
             return yb
 
