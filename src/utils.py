@@ -649,25 +649,34 @@ class TreeTODT(Modelset):
         x_train, x_test, Y_train, Y_test = train_test_split(self.x, self.Y, test_size=test_size)
         self.x_train, self.x_test, self.Y_train, self.Y_test = x_train, x_test, Y_train, Y_test
 
-    def ensemble_tree(self, run='train', tree_feature_colnames=None):
+    def ensemble_tree(self, run='train', lin_feature_colnames=None, tree_feature_colnames=None):
         '''
 
         :return:
         '''
+        if lin_feature_colnames is None:
+            lin_feature_colnames = [
+                't1',
+                't2',
+                't3',
+                't4',
+                't5',
+                't6',
+            ]
         if tree_feature_colnames is None:
             tree_feature_colnames = [
                 'TOD',
                 # 'HP_outdoor_prior',
                 # 'HP_outdoor_prior2',
                 # 'HP_outdoor_prior3',
-                'diff1',
-                'diff2',
-                'diff3',
-                'diff4',
+                # 'diff1',
+                # 'diff2',
+                # 'diff3',
+                # 'diff4',
                 # 'HP_outdoor_rolling'
             ]
         if run == 'train':
-            xa = self.x.drop(columns=tree_feature_colnames)
+            xa = self.x[lin_feature_colnames]
             reg = LinearRegression().fit(xa, self.Y)
             ya = reg.predict(xa)
             self.reg1 = reg
@@ -684,15 +693,19 @@ class TreeTODT(Modelset):
             Y_colname = 'HP_outdoor'
             # df = self.df_joined[pd.isnull(self.df_joined[Y_colname])]
             df = self.df_joined.copy()
-            df_xa = df.drop(columns=tree_feature_colnames+[Y_colname])
+            df_xa = df[lin_feature_colnames]
             df[Y_colname + '_predicted'] = np.nan
             for index, row in df[pd.isnull(self.df_joined[Y_colname])].iterrows():
                 iindex = df.index.get_loc(index)
-                xa = np.array(df_xa.loc[index]).reshape(1, -1)
+                # xa = np.array(df_xa.loc[index]).reshape(1, -1)
+                xa = df_xa.loc[[index]]
                 ya = self.reg1.predict(xa)
-                xb_row = row[tree_feature_colnames]
-                xb_row['linreg_prediction'] = ya[0]
-                yb = self.reg2.predict(np.array(xb_row).reshape(1, -1))
+                ya = pd.DataFrame(ya, index=xa.index, columns=['linreg_prediction'])
+                xb = ya
+                xb[tree_feature_colnames] = row[tree_feature_colnames]
+                # xb['linreg_prediction'] = ya[0]
+                # yb = self.reg2.predict(np.array(xb_row).reshape(1, -1))
+                yb = self.reg2.predict(xb)
                 df.loc[index, Y_colname] = yb[0]
                 df.loc[index, Y_colname + '_predicted'] = yb[0]
                 df_for_shifted = df[[Y_colname]].iloc[iindex-6:iindex+2]
@@ -703,7 +716,7 @@ class TreeTODT(Modelset):
             yb = df[Y_colname]
             # now predict the already known time slots
             df_already = df.loc[pd.isnull(df[Y_colname + '_predicted'])]
-            xa = df_already.drop(columns=tree_feature_colnames + [Y_colname + '_predicted'] + [Y_colname])
+            xa = df_already[lin_feature_colnames]
             xa.dropna(inplace=True)
             ya = self.reg1.predict(xa)
             ya = pd.DataFrame(ya, index=xa.index, columns=['linreg_prediction'])
