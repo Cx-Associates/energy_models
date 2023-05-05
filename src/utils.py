@@ -153,18 +153,17 @@ class Dataset:
         self.df_trimmed = df
 
         try:
+            self.x = df[self.x]
             self.temperature_series = df['temp']
-            self.x = self.temperature_series
         except KeyError:
             pass
         try:
+            self.Y = df[self.Y]
             self.energy_series = df['kWh']
-            self.Y = self.energy_series
         except KeyError:
             try:
                 energy_colname = kwargs['energy_colname']
                 self.energy_series = df[energy_colname]
-                self.Y = self.energy_series
             except KeyError:
                 pass
     def check_zeroes(self):
@@ -185,10 +184,10 @@ class Modelset(Dataset):
                     self.__dict__ = args[0].__dict__.copy()
             # elif type(args[0]) is dict:
             #     self.__dict__ = args[0].copy()
-                else: #ToDo: clean this up; it is redundant with else clause a few lines below
-                    super().__init__(
-                        *args, **kwargs
-                    )
+            else: #ToDo: clean this up; it is redundant with else clause a few lines below
+                super().__init__(
+                    *args, **kwargs
+                )
         except IndexError:
             # super().__init__(
             #     args[0],
@@ -317,10 +316,10 @@ class TOWT(Modelset):
             if args:
                 if type(args[0]) is Modelset:
                     self.__dict__ = args[0].__dict__.copy()
-                else: #ToDo: clean this up; it is redundant with else clause a few lines below
-                    super().__init__(
-                        *args, **kwargs
-                    )
+            else: #ToDo: clean this up; it is redundant with else clause a few lines below
+                super().__init__(
+                    *args, **kwargs
+                )
         except IndexError:
             # super().__init__(
             #     args[0],
@@ -370,7 +369,7 @@ class TOWT(Modelset):
             TOWdf[tow].loc[index] = 1
         labels = ['h' + str(x) for x in TOWdf.columns]
         TOWdf.columns = labels
-        df = df.join(TOWdf)
+        df = pd.concat([df, TOWdf], axis=1)
         df.dropna(inplace=True)
 
         # break temp into bins
@@ -381,18 +380,19 @@ class TOWT(Modelset):
             bin_size = (max_temp - min_temp) / (n_bins)
             temp_bins = np.arange(min_temp, max_temp, bin_size)
             temp_bins = list(np.append(temp_bins, max_temp))
-            labels, labels_index = self.TOWT_column_labels(n_bins)
+            labels, labels_index = TOWT_column_labels(n_bins)
             df['temp_bin'] = pd.cut(df['temp'], bins, labels=labels_index)
             self.temp_bins = temp_bins
         elif bins == 'from train':
             # This handles cases where the range of test data may exceed range of train data.
             temp_bins = self.temp_bins
             n_bins = len(temp_bins) - 1
-            labels, labels_index = self.TOWT_column_labels(n_bins)
+            labels, labels_index = TOWT_column_labels(n_bins)
             old_min_temp, old_max_temp = temp_bins[0], temp_bins[-1]
             min_temp = np.floor(df['temp'].min())
             #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
-            temp_bins[0] = min_temp
+            if temp_bins[0] > min_temp:
+                temp_bins[0] = min_temp
             df['temp_bin'] = pd.cut(df['temp'], temp_bins, labels=labels_index)
             df.fillna(0, inplace=True)
         temp_df = pd.DataFrame(columns=labels_index, index=df.index)
@@ -443,8 +443,9 @@ class TOWT(Modelset):
             x, Y = self.x_test, self.Y_test
             bins = 'from train'
         elif on == 'predict': #ToDo: add hard stop so you cannot cast prediction onto baseline period
-            x = self.x.truncate(start, end)
-            Y = self.Y.truncate(start, end)
+            # x = self.x.truncate(start, end)
+            # Y = self.Y.truncate(start, end)
+            x = self.x_pred
             bins = 'from train'
         elif on == 'normalize':
             x = self.x_norm
@@ -469,14 +470,19 @@ class TOWT(Modelset):
             self.x_test, self.y_test, self.Y_test = x, y, Y
         elif on == 'predict':
             #ToDo: refactor / break out under a new function called prediction metrics or something
-            self.X_pred, self.y_pred, self.Y_pred = x, y, Y
-            self.kWh_performance_actual = Y.sum()
-            self.kWh_performance_pred = y.sum()
-            self.energy_savings = self.kWh_performance_pred - self.kWh_performance_actual
-            self.pct_savings = 100 * self.energy_savings / self.kWh_performance_actual
+            self.X_pred, self.y_pred = x, y
+            # self.kWh_performance_pred = y.sum()
+            try:
+                self.Y_pred = Y
+                self.kWh_performance_actual = Y.sum()
+                self.energy_savings = self.kWh_performance_pred - self.kWh_performance_actual
+                self.pct_savings = 100 * self.energy_savings / self.kWh_performance_actual
+            except UnboundLocalError:
+                pass
             # self.annualized_savings = (y.mean() - Y.mean())*8760 #Todo: not how you do this
         elif on == 'normalize':
             self.y_norm = y
+
 
     def predict_recursive(self, x=None, Y=None):
         pass
@@ -531,10 +537,10 @@ class TreeTODT(Modelset):
             if args:
                 if type(args[0]) is Modelset:
                     self.__dict__ = args[0].__dict__.copy()
-                else: #ToDo: clean this up; it is redundant with else clause a few lines below
-                    super().__init__(
-                        *args, **kwargs
-                    )
+            else: #ToDo: clean this up; it is redundant with else clause a few lines below
+                super().__init__(
+                    *args, **kwargs
+                )
         except IndexError:
             super().__init__(
                 *args, **kwargs
@@ -542,17 +548,6 @@ class TreeTODT(Modelset):
         self.type = 'tree_todt'
         self.temp_bins = None
         self.reg_colnames = None
-
-    def TOWT_column_labels(self, n_bins):
-        """helper function
-
-        :param n_bins:
-        :return:
-        """
-        labels = np.arange(1, n_bins + 1)
-        labels_index = [np.int(x - 1) for x in labels]
-        labels = ['t' + str(x) for x in labels]
-        return labels, labels_index
 
     def add_TODT_features(self, df=None, time_bins=144, look_back_hrs=1, temp_bins=6):
         """Loosely based on LBNL TOWT model, except uses Decision Tree Regression rather than
@@ -575,7 +570,7 @@ class TreeTODT(Modelset):
             bin_size = (max_temp - min_temp) / (n_bins)
             temp_bins = np.arange(min_temp, max_temp, bin_size)
             temp_bins = list(np.append(temp_bins, max_temp))
-            labels, labels_index = self.TOWT_column_labels(n_bins)
+            labels, labels_index = TOWT_column_labels(n_bins)
             df['temp_bin'] = pd.cut(df['temp'], temp_bins, labels=labels_index)
             self.temp_bins = temp_bins
         elif temp_bins == 'from train':
@@ -674,7 +669,7 @@ class TreeTODT(Modelset):
                 # 'diff2',
                 # 'diff3',
                 # 'diff4',
-                'HP_outdoor_rolling'
+                'whole_home_rolling'
             ]
         if run == 'train':
             xa = self.x[lin_feature_colnames]
