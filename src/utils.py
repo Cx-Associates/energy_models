@@ -389,10 +389,13 @@ class TOWT(Modelset):
             n_bins = len(temp_bins) - 1
             labels, labels_index = TOWT_column_labels(n_bins)
             old_min_temp, old_max_temp = temp_bins[0], temp_bins[-1]
-            min_temp = np.floor(df['temp'].min())
+            min_temp = df['temp'].min()
+            max_temp = df['temp'].max()
             #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
             if temp_bins[0] > min_temp:
                 temp_bins[0] = min_temp
+            if temp_bins[-1] < max_temp:
+                temp_bins[-1] = max_temp
             df['temp_bin'] = pd.cut(df['temp'], temp_bins, labels=labels_index)
             df.fillna(0, inplace=True)
         temp_df = pd.DataFrame(columns=labels_index, index=df.index)
@@ -515,14 +518,14 @@ class SimpleOLS(Modelset):
                 Y = pd.DataFrame(self.Y)
                 reg = LinearRegression().fit(x, Y)
                 y = reg.predict(x)
-                y = pd.DataFrame(y, index=x.index).rename(columns={0: 'kWh_predicted'})
+                y = pd.DataFrame(y, index=x.index).rename(columns={0: 'kWh_train_predicted'})
                 self.x_train, self.y_train, self.Y_train = x, y, Y
                 self.Y_test, self.y_test = self.Y_train, self.y_train
                 self.reg = reg
         elif on == 'predict':
             x_pred = pd.DataFrame(self.x_pred)
             y = self.reg.predict(x_pred)
-            self.y_pred = pd.DataFrame(y, index=x_pred.index)
+            self.y_pred = pd.DataFrame(y, index=x_pred.index).rename(columns={0: 'kWh_predicted'})
 
 
 class TreeTODT(Modelset):
@@ -537,6 +540,10 @@ class TreeTODT(Modelset):
             if args:
                 if type(args[0]) is Modelset:
                     self.__dict__ = args[0].__dict__.copy()
+                else:  # ToDo: clean this up; it is redundant with else clause a few lines below
+                    super().__init__(
+                        *args, **kwargs
+                    )
             else: #ToDo: clean this up; it is redundant with else clause a few lines below
                 super().__init__(
                     *args, **kwargs
@@ -578,11 +585,17 @@ class TreeTODT(Modelset):
             temp_bins = self.temp_bins
             n_bins = len(temp_bins) - 1
             old_min_temp, old_max_temp = temp_bins[0], temp_bins[-1]
-            min_temp = np.floor(df['temp'].min())
+            min_temp = df['temp'].min()
+            max_temp = df['temp'].max()
+            #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
+            if temp_bins[0] > min_temp:
+                temp_bins[0] = min_temp
+            if temp_bins[-1] < max_temp:
+                temp_bins[-1] = max_temp
             # ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
             # ToDo: the below line should only apply if the new bin min is LOWER than the old one.
             # temp_bins[0] = min_temp
-            labels, labels_index = self.TOWT_column_labels(n_bins)
+            labels, labels_index = TOWT_column_labels(n_bins)
             df['temp_bin'] = pd.cut(df['temp'], temp_bins, labels=labels_index)
             # df.fillna(0, inplace=True)
         temp_df = pd.DataFrame(columns=labels_index, index=df.index)
@@ -644,7 +657,7 @@ class TreeTODT(Modelset):
         x_train, x_test, Y_train, Y_test = train_test_split(self.x, self.Y, test_size=test_size)
         self.x_train, self.x_test, self.Y_train, self.Y_test = x_train, x_test, Y_train, Y_test
 
-    def ensemble_tree(self, run='train', lin_feature_colnames=None, tree_feature_colnames=None):
+    def ensemble_tree(self, run='train', Y='HP_outdoor', lin_feature_colnames=None, tree_feature_colnames=None):
         '''
 
         :return:
@@ -661,15 +674,15 @@ class TreeTODT(Modelset):
         if tree_feature_colnames is None:
             tree_feature_colnames = [
                 'TOD',
-                # 'HP_outdoor_prior',
-                # 'HP_outdoor_prior2',
-                # 'HP_outdoor_prior3',
-                # 'HP_outdoor_prior4',
-                # 'diff1',
-                # 'diff2',
-                # 'diff3',
-                # 'diff4',
-                'whole_home_rolling'
+                f'{Y}_prior',
+                f'{Y}_prior2',
+                f'{Y}_prior3',
+                f'{Y}_prior4',
+                'diff1',
+                'diff2',
+                'diff3',
+                'diff4',
+                f'{Y}_rolling'
             ]
         if run == 'train':
             xa = self.x[lin_feature_colnames]
@@ -686,7 +699,8 @@ class TreeTODT(Modelset):
             self.reg2 = gbreg
             self.reg2_colnames = tree_feature_colnames + ['linreg_prediction']
         if run == 'predict':
-            Y_colname = 'HP_outdoor'
+            # Y_colname = 'HP_outdoor'
+            Y_colname = Y
             # df = self.df_joined[pd.isnull(self.df_joined[Y_colname])]
             df = self.df_joined.copy()
             df_xa = df[lin_feature_colnames]
@@ -765,7 +779,7 @@ class TreeTODT(Modelset):
         y = pd.DataFrame(y)
 
 
-    def run(self, on='train', start=None, end=None):
+    def run(self, on='train', start=None, end=None, Y='HP_outdoor'):
         x, bins = None, None
         if on == 'train':
             x, Y = self.x_train, self.Y_train
@@ -783,11 +797,12 @@ class TreeTODT(Modelset):
         if on in {'test', 'predict', 'normalize'}:
             x = x[self.x_train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
         if on == 'train':
-            y = self.ensemble_tree()
+            y = self.ensemble_tree(Y=Y.name)
             # self.gradient_boost()
         else:
-            reg = self.reg
-            y = reg.predict(x)
+            y = self.ensemble_tree(run='predict', Y=Y.name)
+            # reg = self.reg
+            # y = reg.predict(x)
         # y = pd.DataFrame(y, index=X.index, columns=['predicted'])
         y = pd.Series(y, index=x.index, name='kW modeled')
         y[y < 0] = 0
