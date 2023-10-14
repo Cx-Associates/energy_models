@@ -106,11 +106,13 @@ class Dataset:
 
     def __init__(
             self,
-            # energy_filepath=None,
-            # weather_filepath=None,
+            energy_filepath=None,
+            weather_filepath=None,
             df=None,
             *args, **kwargs
     ):
+        self.energy_filepath = energy_filepath
+        self.weather_filepath = weather_filepath
         self.__dict__ = kwargs.copy()
         self.name = None
         self.energy_series = None
