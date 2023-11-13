@@ -11,7 +11,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import cross_validate
 
-sys.path.append('../src')
+sys.path.append('')
 
 # directories
 dir_here = r'src'
@@ -111,7 +111,6 @@ class Dataset:
             df=None,
             *args, **kwargs
     ):
-        self.__dict__ = kwargs.copy()
         self.name = None
         self.energy_series = None
         self.temperature_series = None
@@ -120,6 +119,7 @@ class Dataset:
         self.sparse_df = None
         self.display_start = None
         self.display_end = None
+        self.__dict__.update(kwargs.copy())
 
         if df is not None:
             pass
@@ -173,6 +173,17 @@ class Dataset:
     def check_sticky(self):
         return
 
+
+class Var():
+    """
+
+    """
+    def __init__(self, data):
+        self.data = data
+        self.train = None
+        self.test = None
+        self.pred = None
+        self.norm = None
 
 class Modelset(Dataset):
     """A child class of DataSet with attributes to use in modeling.

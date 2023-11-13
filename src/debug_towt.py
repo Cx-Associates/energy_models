@@ -1,8 +1,7 @@
 import os
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from energy_models.src.utils import TOWT, Dataset, Modelset
-from src.st_utils import make_TOWT
+from subrepos.energy_models.src.utils import TOWT
 from src.data_config import dict_config
 
 # for interactive plotting while debugging in PyCharm
