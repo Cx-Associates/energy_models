@@ -185,46 +185,22 @@ class Var():
         self.pred = None
         self.norm = None
 
-class Model(Dataset):
+class Model():
     """A child class of DataSet with attributes to use in modeling.
 
     """
-    def __init__(self, *args, **kwargs):
-        try:
-            if args:
-                if type(args[0]) is Dataset:
-                    self.__dict__ = args[0].__dict__.copy()
-            # elif type(args[0]) is dict:
-            #     self.__dict__ = args[0].copy()
-                else: #ToDo: clean this up; it is redundant with else clause a few lines below
-                    super().__init__(
-                        *args, **kwargs
-                    )
-        except IndexError:
-            super().__init__(
-                **kwargs
-            )
-        if 'x' not in self.__dict__:  #ToDo: still need this after refactoring?
-            self.x = Var(kwargs['df'][kwargs['x']])
-        if 'Y' not in self.__dict__:
-            self.Y = Var(kwargs['df'][kwargs['Y']])
+    def __init__(self, dataset=None):
         self.reg = None
         self.clf = None
-        self.y = Var()
+        self.x, self.Y, self.y = Var(), Var(), Var()
         self.performance_actual = None
         self.performance_pred = None
         self.rsq = None
         self.cvrmse = None
         self.savings_uncertainty = None
         self.fsu = None
-
-        # if x == 'temperature':
-        #     #ToDo: why make x a df here and keep y as a series?
-        #     self.x = pd.DataFrame(self.temperature_series)
-        # if y == 'energy':
-        #     self.Y = self.energy_series
-        # self.truncate_baseline() #ToDo: moved this over to TOWT.__init__(), delete line if all's good
-
+        if dataset is not None:
+            self.dataset = dataset
 
     def set_balance_point(self, cooling=None, heating=None):
         s = balance_point_transform(self.x['temp'], cooling)
@@ -291,8 +267,6 @@ class Model(Dataset):
     def normalize(self):
         # function to reg.predict onto weather normalization data set
         pass
-
-
 
 class TOWT(Model):
     """Class for performing time-of-week-and-temperature regression and storing results as class attributes.
@@ -468,8 +442,6 @@ class TOWT(Model):
     def predict_recursive(self, x=None, Y=None):
         pass
 
-
-
 class SimpleOLS(Model):
     """
 
@@ -504,7 +476,6 @@ class SimpleOLS(Model):
             x_pred = pd.DataFrame(self.x.pred)
             y = self.reg.predict(x_pred)
             self.y.pred = pd.DataFrame(y, index=x_pred.index)
-
 
 class TreeTODT(Model):
     """
@@ -628,8 +599,9 @@ class TreeTODT(Model):
         :return:
         '''
         test_size = .5
-        x.train, x.test, Y.train, Y.test = train_test_split(self.x, self.Y, test_size=test_size)
-        self.x.train, self.x.test, self.Y.train, self.Y.test = x.train, x.test, Y.train, Y.test
+        x_train, x_test, Y_train, Y_test = train_test_split(self.x, self.Y, test_size=test_size)
+        #ToDo: double check above line is safe as far as splitting both x and Y.
+        self.x.train, self.x.test, self.Y.train, self.Y.test = x_train, x_test, Y_train, Y_test
 
     def ensemble_tree(self, run='train', tree_feature_colnames=None):
         '''
