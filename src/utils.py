@@ -178,14 +178,14 @@ class Var():
     """
 
     """
-    def __init__(self, data):
+    def __init__(self, data=None):
         self.data = data
         self.train = None
         self.test = None
         self.pred = None
         self.norm = None
 
-class Modelset(Dataset):
+class Model(Dataset):
     """A child class of DataSet with attributes to use in modeling.
 
     """
@@ -201,41 +201,18 @@ class Modelset(Dataset):
                         *args, **kwargs
                     )
         except IndexError:
-            # super().__init__(
-            #     args[0],
-            #     args[1]
-            # )
             super().__init__(
                 **kwargs
             )
-        # self.baseline_start = None
-        # self.baseline_end = None
-        # self.train_start = None
-        # self.train_end = None
-        # self.bp_heating = None
-        # self.bp_cooling = None
-        # self.performance_start = None
-        # self.performance_end = None
-        if 'x' not in self.__dict__:
-            self.x = kwargs['df'][kwargs['x']]
-        self.x_train = None
-        self.x_test = None
-        self.x_pred = None
-        self.x_norm = None
+        if 'x' not in self.__dict__:  #ToDo: still need this after refactoring?
+            self.x = Var(kwargs['df'][kwargs['x']])
         if 'Y' not in self.__dict__:
-            self.Y = kwargs['df'][kwargs['Y']]
-        self.Y_train = None
-        self.Y_test = None
-        self.Y_pred = None
+            self.Y = Var(kwargs['df'][kwargs['Y']])
         self.reg = None
         self.clf = None
-        self.y = None
-        self.y_train = None
-        self.y_test = None
-        self.y_pred = None
-        self.y_norm = None
-        self.kWh_performance_actual = None
-        self.kWh_performance_pred = None
+        self.y = Var()
+        self.performance_actual = None
+        self.performance_pred = None
         self.rsq = None
         self.cvrmse = None
         self.savings_uncertainty = None
@@ -251,16 +228,16 @@ class Modelset(Dataset):
 
     def set_balance_point(self, cooling=None, heating=None):
         s = balance_point_transform(self.x['temp'], cooling)
-        self.x_train = self.x.copy()
-        self.x_train['temp_bp'] = s
-        self.x_test['temp_bp'] = s
+        self.x.train = self.x.copy()
+        self.x.train['temp_bp'] = s
+        self.x.test['temp_bp'] = s
 
     def clear_balance_points(self):
         if 'temp_bp' in self.x.columns:
             self.x.drop(columns='temp_bp', inplace=True)
         try:
-            if 'temp_bp' in self.x_train.columns:
-                self.x_train.drop(columns='temp_bp', inplace=True)
+            if 'temp_bp' in self.x.train.columns:
+                self.x.train.drop(columns='temp_bp', inplace=True)
         except AttributeError:
             pass
         self.bp_cooling = None
@@ -270,24 +247,24 @@ class Modelset(Dataset):
 
         :return:
         """
-        rsq = r2_score(self.Y_test, self.y_test)
+        rsq = r2_score(self.Y.test, self.y.test)
         self.rsq = rsq
 
-        mse = mean_squared_error(self.Y_test, self.y_test)
-        cvrmse = np.sqrt(mse) / np.mean(self.Y_test)
+        mse = mean_squared_error(self.Y.test, self.y.test)
+        cvrmse = np.sqrt(mse) / np.mean(self.Y.test)
         self.cvrmse = cvrmse
 
-        self.ndbe = (self.Y_test.sum() - self.y_test.sum()) / self.Y_test.sum()
+        self.ndbe = (self.Y.test.sum() - self.y.test.sum()) / self.Y.test.sum()
 
     def prediction_metrics(self):
         """
 
         @return:
         """
-        F = self.kWh_performance_actual / self.kWh_performance_pred
+        F = self.performance_actual / self.performance_pred
         t = 1
-        n = len(self.Y_train)  # ToDo: check if this holds for models requiring train/test split
-        m = len(self.y_pred)
+        n = len(self.Y.train)  # ToDo: check if this holds for models requiring train/test split
+        m = len(self.y.pred)
 
         U = t * (1.26 * self.cvrmse / F * np.sqrt((n + 2) / (n * m)))
         #ToDo: check this in general
@@ -296,7 +273,7 @@ class Modelset(Dataset):
         self.fsu = U / (self.energy_savings)
 
     def plot_modelset(self):
-        df_scatter = pd.concat([self.Y_train, self.y_test], axis=1)
+        df_scatter = pd.concat([self.Y_train, self.y.test], axis=1)
         df_scatter.plot.scatter('kWh', 'predicted', alpha=.2)
 
     def check_zeroes(self):
@@ -317,7 +294,7 @@ class Modelset(Dataset):
 
 
 
-class TOWT(Modelset):
+class TOWT(Model):
     """Class for performing time-of-week-and-temperature regression and storing results as class attributes.
 
     """
@@ -325,7 +302,7 @@ class TOWT(Modelset):
     def __init__(self, *args, **kwargs):
         try:
             if args:
-                if type(args[0]) is Modelset:
+                if type(args[0]) is Model:
                     self.__dict__ = args[0].__dict__.copy()
                 else: #ToDo: clean this up; it is redundant with else clause a few lines below
                     super().__init__(
@@ -339,8 +316,8 @@ class TOWT(Modelset):
             super().__init__(
                 *args, **kwargs
             )
-        # self.x_train, self.x_test = self.x.copy(), self.x.copy()
-        # self.Y_train, self.Y_test = self.Y.copy(), self.Y.copy()
+        # self.x.train, self.x.test = self.x.copy(), self.x.copy()
+        # self.Y_train, self.Y.test = self.Y.copy(), self.Y.copy()
         self.type = 'towt'
         self.temp_bins = None
         try:
@@ -439,29 +416,29 @@ class TOWT(Modelset):
             after = self.train_end
         x_train = self.x.truncate(before=before, after=after)
         Y_train = self.Y.truncate(before=before, after=after)
-        self.x_train = x_train
-        self.x_test = x_train
+        self.x.train = x_train
+        self.x.test = x_train
         self.Y_train = Y_train
-        self.Y_test = Y_train
+        self.Y.test = Y_train
 
     def run(self, on='train', start=None, end=None):
         x, bins = None, None
         if on == 'train':
-            x, Y = self.x_train, self.Y_train
+            x, Y = self.x.train, self.Y_train
             bins = 6 #ToDo: call this out
         elif on == 'test':
-            x, Y = self.x_test, self.Y_test
+            x, Y = self.x.test, self.Y.test
             bins = 'from train'
         elif on == 'predict': #ToDo: add hard stop so you cannot cast prediction onto baseline period
             x = self.x.truncate(start, end)
             Y = self.Y.truncate(start, end)
             bins = 'from train'
         elif on == 'normalize':
-            x = self.x_norm
+            x = self.x.norm
             bins = 'from train'
         x = self.add_TOWT_features(x, bins=bins)
         if on in {'test', 'predict', 'normalize'}:
-            x = x[self.x_train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
+            x = x[self.x.train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
         if on == 'train':
             reg = LinearRegression().fit(x, Y)
         else:
@@ -473,34 +450,34 @@ class TOWT(Modelset):
         y = pd.Series(y, index=x.index, name='kW modeled')
         y[y < 0] = 0
         if on == 'train':
-            self.x_train, self.y_train, self.Y_train = x, y, Y
+            self.x.train, self.y.train, self.Y_train = x, y, Y
             self.reg = reg
         elif on == 'test':
-            self.x_test, self.y_test, self.Y_test = x, y, Y
+            self.x.test, self.y.test, self.Y.test = x, y, Y
         elif on == 'predict':
             #ToDo: refactor / break out under a new function called prediction metrics or something
-            self.X_pred, self.y_pred, self.Y_pred = x, y, Y
+            self.X_pred, self.y.pred, self.Y.pred = x, y, Y
             self.kWh_performance_actual = Y.sum()
             self.kWh_performance_pred = y.sum()
             self.energy_savings = self.kWh_performance_pred - self.kWh_performance_actual
             self.pct_savings = 100 * self.energy_savings / self.kWh_performance_actual
             # self.annualized_savings = (y.mean() - Y.mean())*8760 #Todo: not how you do this
         elif on == 'normalize':
-            self.y_norm = y
+            self.y.norm = y
 
     def predict_recursive(self, x=None, Y=None):
         pass
 
 
 
-class SimpleOLS(Modelset):
+class SimpleOLS(Model):
     """
 
     """
     def __init__(self, *args, **kwargs):
         try:
             if args:
-                if type(args[0]) is Modelset:
+                if type(args[0]) is Model:
                     self.__dict__ = args[0].__dict__.copy()
             else: #ToDo: clean this up; it is redundant with else clause a few lines below
                 super().__init__(
@@ -520,23 +497,23 @@ class SimpleOLS(Modelset):
                 reg = LinearRegression().fit(x, Y)
                 y = reg.predict(x)
                 y = pd.DataFrame(y, index=x.index).rename(columns={0: 'kWh_predicted'})
-                self.x_train, self.y_train, self.Y_train = x, y, Y
-                self.Y_test, self.y_test = self.Y_train, self.y_train
+                self.x.train, self.y.train, self.Y.train = x, y, Y
+                self.Y.test, self.y.test = self.Y.train, self.y.train
                 self.reg = reg
         elif on == 'predict':
-            x_pred = pd.DataFrame(self.x_pred)
+            x_pred = pd.DataFrame(self.x.pred)
             y = self.reg.predict(x_pred)
-            self.y_pred = pd.DataFrame(y, index=x_pred.index)
+            self.y.pred = pd.DataFrame(y, index=x_pred.index)
 
 
-class TreeTODT(Modelset):
+class TreeTODT(Model):
     """
 
     """
     def __init__(self, *args, **kwargs):
         try:
             if args:
-                if type(args[0]) is Modelset:
+                if type(args[0]) is Model:
                     self.__dict__ = args[0].__dict__.copy()
                 else: #ToDo: clean this up; it is redundant with else clause a few lines below
                     super().__init__(
@@ -651,8 +628,8 @@ class TreeTODT(Modelset):
         :return:
         '''
         test_size = .5
-        x_train, x_test, Y_train, Y_test = train_test_split(self.x, self.Y, test_size=test_size)
-        self.x_train, self.x_test, self.Y_train, self.Y_test = x_train, x_test, Y_train, Y_test
+        x.train, x.test, Y.train, Y.test = train_test_split(self.x, self.Y, test_size=test_size)
+        self.x.train, self.x.test, self.Y.train, self.Y.test = x.train, x.test, Y.train, Y.test
 
     def ensemble_tree(self, run='train', tree_feature_colnames=None):
         '''
@@ -677,13 +654,13 @@ class TreeTODT(Modelset):
         ya = pd.DataFrame(ya, index=self.x.index)
         xb = ya.join(self.x[tree_feature_colnames])
         test_size = .5
-        # x_train, x_test, Y_train, Y_test = train_test_split(xb, self.Y, test_size=test_size)
-        # treereg = DecisionTreeRegressor().fit(x_train, self.Y_train)
+        # x.train, x.test, Y.train, Y.test = train_test_split(xb, self.Y, test_size=test_size)
+        # treereg = DecisionTreeRegressor().fit(x.train, self.Y.train)
         gbreg = HistGradientBoostingRegressor().fit(xb, self.Y)
         yb = gbreg.predict(xb)
         self.reg = gbreg
         self.reg_colnames = tree_feature_colnames
-        self.y_test = pd.DataFrame(yb, index=xb.index)
+        self.y.test = pd.DataFrame(yb, index=xb.index)
         if run == 'predict':
             xa_future
 
@@ -732,20 +709,20 @@ class TreeTODT(Modelset):
     def run(self, on='train', start=None, end=None):
         x, bins = None, None
         if on == 'train':
-            x, Y = self.x_train, self.Y_train
+            x, Y = self.x.train, self.Y.train
             bins = 6 #ToDo: call this out
         elif on == 'test':
-            x, Y = self.x_test, self.Y_test
+            x, Y = self.x.test, self.Y.test
             bins = 'from train'
         elif on == 'predict': #ToDo: add hard stop so you cannot cast prediction onto baseline period
             x = self.x.truncate(start, end)
             Y = self.Y.truncate(start, end)
             bins = 'from train'
         elif on == 'normalize':
-            x = self.x_norm
+            x = self.x.norm
             bins = 'from train'
         if on in {'test', 'predict', 'normalize'}:
-            x = x[self.x_train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
+            x = x[self.x.train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
         if on == 'train':
             self.ensemble_tree()
             # self.gradient_boost()
@@ -758,17 +735,17 @@ class TreeTODT(Modelset):
         y = pd.Series(y, index=x.index, name='kW modeled')
         y[y < 0] = 0
         if on == 'train':
-            self.x_train, self.y_train, self.Y_train = x, y, Y
+            self.x.train, self.y.train, self.Y.train = x, y, Y
             self.reg = reg
         elif on == 'test':
-            self.x_test, self.y_test, self.Y_test = x, y, Y
+            self.x.test, self.y.test, self.Y.test = x, y, Y
         elif on == 'predict':
             #ToDo: refactor / break out under a new function called prediction metrics or something
-            self.X_pred, self.y_pred, self.Y_pred = x, y, Y
+            self.X_pred, self.y.pred, self.Y.pred = x, y, Y
             self.kWh_performance_actual = Y.sum()
             self.kWh_performance_pred = y.sum()
             self.energy_savings = self.kWh_performance_pred - self.kWh_performance_actual
             self.pct_savings = 100 * self.energy_savings / self.kWh_performance_actual
             # self.annualized_savings = (y.mean() - Y.mean())*8760 #Todo: not how you do this
         elif on == 'normalize':
-            self.y_norm = y
+            self.y.norm = y
