@@ -276,8 +276,10 @@ class TOWT(Model):
     def __init__(self, *args, **kwargs):
         try:
             if args:
-                if type(args[0]) is Model:
+                arg_class = args[0].__class__
+                if type(arg_class) is Model or issubclass(arg_class, Model):
                     self.__dict__ = args[0].__dict__.copy()
+                    self.__dict__.update(**kwargs)
                 else: #ToDo: clean this up; it is redundant with else clause a few lines below
                     super().__init__(
                         *args, **kwargs
@@ -302,7 +304,8 @@ class TOWT(Model):
                 self.train_start, self.train_end = df.index[0], df.index[-1]
                 self.truncate_baseline()
             else:
-                raise('Because no trunacting arguments (train_start, train_end) were supplied, args[0] must be type df.')
+                raise('Because no truncating arguments (train_start, train_end) were supplied, args[0] must be type '
+                      'df.')
 
     def bin_temps(self, num=6):
         """Per LBNL
