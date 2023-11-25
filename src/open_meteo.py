@@ -14,11 +14,13 @@ forecast_url = f'https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude
                f'&temperature_unit=fahrenheit'
 
 
-def get_historic_url(time_frame):
+def get_historic_url(location, time_frame, feature='temperature_2m'):
     '''Given a time frame, get the historical weather
 
-    :type time_frame: tuple
+    :param location
+    :param time_frame: tuple
     '''
+    lat, long = location[0], location[1]
     time_frame = list(time_frame)
     if not isinstance(time_frame[0], str):
         start = time_frame[0].date().strftime('%Y-%m-%d')
@@ -30,7 +32,7 @@ def get_historic_url(time_frame):
 
     str_req = f'https://archive-api.open-meteo.com/v1/era5?latitude={lat}&longitude={long}' \
               f'&start_date={time_frame[0]}&end_date={time_frame[1]}' \
-              f'&hourly=temperature_2m' \
+              f'&hourly={feature}' \
               f'&temperature_unit=fahrenheit'
 
     return str_req
@@ -52,7 +54,11 @@ def get_hist_and_forecast(past_days=14, forecast_days=14):
     return series
 
 
-def open_meteo_get(time_frame='forecast'):
+def open_meteo_get(
+        location=(lat, long),
+        time_frame='forecast',
+        feature='temperature_2m'
+):
     """
 
     :param time_frame:
@@ -62,14 +68,14 @@ def open_meteo_get(time_frame='forecast'):
     """
     url = None
     if time_frame == 'forecast':
-        url = forecast_url
+        url = forecast_url #ToDo: future-proof this whole function
     elif type(time_frame) == tuple:
-        url = get_historic_url(time_frame)
+        url = get_historic_url(location, time_frame, feature)
 
     res = requests.get(url)
     dict_ = res.json()
     series = pd.Series(data=dict_['hourly']['temperature_2m'], index=dict_['hourly']['time'])
     series.index = pd.to_datetime(series.index)
-    series.name = 'temp'
+    series.name = feature
 
     return series

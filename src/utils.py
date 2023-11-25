@@ -46,6 +46,7 @@ def read_weather_data(filepath, colname, freq='h', irreg=False):
     df = df.resample(freq).mean()
     return df
 
+
 def balance_point_transform(series, temp):
     """
 
@@ -56,7 +57,7 @@ def balance_point_transform(series, temp):
     return series.apply(lambda x: np.amax([x - temp, 0]) + temp)
 
 
-def TOWT_column_labels(n_bins):
+def TOxT_column_labels(n_bins):
     """helper function for TOWT and TODT classes
 
     :param n_bins:
@@ -94,8 +95,6 @@ def get_projected_year(tmy, history, forecast=None):
     df[df.index == df_history.index] = df_history
 
     return df
-
-
 
 
 class Dataset:
@@ -173,7 +172,6 @@ class Dataset:
     def check_sticky(self):
         return
 
-
 class Var():
     """
 
@@ -192,7 +190,7 @@ class Model():
     def __init__(self, dataset=None):
         self.reg = None
         self.clf = None
-        self.x, self.Y, self.y = Var(), Var(), Var()
+        self.X, self.Y, self.y = Var(), Var(), Var()
         self.performance_actual = None
         self.performance_pred = None
         self.rsq = None
@@ -201,6 +199,10 @@ class Model():
         self.fsu = None
         if dataset is not None:
             self.dataset = dataset
+
+    def set_from_df(self, df, Y_col, X_col):
+        self.Y = Var(df[Y_col])
+        self.X = Var(df[X_col])
 
     def set_balance_point(self, cooling=None, heating=None):
         s = balance_point_transform(self.x['temp'], cooling)
@@ -444,6 +446,100 @@ class TOWT(Model):
 
     def predict_recursive(self, x=None, Y=None):
         pass
+
+class TODTweekend(Model):
+    """
+
+    """
+    def __init__(self, df, Y_col='kWh', X_col='OAT'):
+        self.temp_bins = None
+        self.data = None
+        if isinstance(df, pd.DataFrame):
+            super().__init__(dataset=df)
+            self.set_from_df(df, Y_col, X_col)
+            self.Y_col, self.X_col = Y_col, X_col
+
+    def train(self, bins=6):
+        df = self.add_TODTweekend_features(self.dataset, bins=bins)
+        Y = df.pop(self.Y_col)
+        reg = LinearRegression().fit(df, Y)
+        y_pred = reg.predict(df)
+        self.reg = reg
+        self.y.test = pd.DataFrame(data=y_pred, index=Y.index)
+        self.Y.test = Y
+        self.score()
+
+    def test(self):
+        pass
+
+    def add_TODTweekend_features(self, df, bins=6, temp_col=None):
+        """Based on LBNL-4944E: Time of Week & Temperature Model outlined in Quantifying Changes in Building Electricity Use
+        ... (2011, Mathieu et al). Given a time-series dataframe with outdoor air temperature column 'temp, this function
+        returns dataframe with 168 columns with boolean (0 or 1) for each hour of the week, plus 6 binned temperature
+        columns. Each column is intended to be a feature or independent variable of an ordinary least squares regression
+        model to determine hourly energy usage as a function of time of week and temperature.
+
+        @param df: (pandas.DataFrame) must have datetime index and at least column 'temp'
+        @param n_bins: (int) number of temperature bins. Per LBNL recommendation, default is 6.
+        @return: (pandas.DataFrame) augmented with features as new columns. original temperature column is dropped.
+        """
+        # add time of week features
+        if temp_col == None:
+            temp_col = self.X_col
+        TOD = df.index.hour
+        TODdf = pd.DataFrame(0, columns=TOD.unique(), index=df.index)
+        for index, row in TODdf.iterrows():
+            tod = index.hour
+            TODdf[tod].loc[index] = 1
+        labels = ['h' + str(x) for x in TODdf.columns]
+        TODdf.columns = labels
+        df = df.join(TODdf)
+        df.dropna(inplace=True)
+        if bins == None:
+            return df
+
+        # break temp into bins
+        if type(bins) == np.int:
+            n_bins = bins
+            min_temp, max_temp = np.floor(df[temp_col].min()), np.ceil(df[temp_col].max())
+            #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
+            bin_size = (max_temp - min_temp) / (n_bins)
+            temp_bins = np.arange(min_temp, max_temp, bin_size)
+            temp_bins = list(np.append(temp_bins, max_temp))
+            labels, labels_index = TOxT_column_labels(n_bins)
+            df['temp_bin'] = pd.cut(df[temp_col], bins, labels=labels_index)
+            self.temp_bins = temp_bins
+        elif bins == 'from train':
+            # This handles cases where the range of test data may exceed range of train data.
+            temp_bins = self.temp_bins
+            n_bins = len(temp_bins) - 1
+            labels, labels_index = TOxT_column_labels(n_bins)
+            old_min_temp, old_max_temp = temp_bins[0], temp_bins[-1]
+            min_temp = np.floor(df[temp_col].min())
+            #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
+            temp_bins[0] = min_temp
+            df['temp_bin'] = pd.cut(df[temp_col], temp_bins, labels=labels_index)
+            df.fillna(0, inplace=True)
+        temp_df = pd.DataFrame(columns=labels_index, index=df.index)
+        bin_deltas = list(np.array(temp_bins[1:]) - np.array(temp_bins[:-1]))
+        for index, row in df.iterrows():
+            colname = np.int(row['temp_bin'])
+            left_cols = list(np.arange(0, colname, 1))
+            write_list = bin_deltas[:colname]
+            temp_row = temp_df.loc[index]
+            temp_row.loc[left_cols] = write_list
+            temp_df.loc[index] = temp_row
+            bin_bottom = temp_bins[colname]
+            temp_df[colname].loc[index] = row[temp_col] - bin_bottom
+        temp_df[0] = pd.to_numeric(temp_df[0])
+        if bins == 'from train':
+            adj_amt = old_min_temp - min_temp
+            temp_df[0] -= adj_amt
+
+        temp_df.fillna(0, inplace=True) #ToDo: not safe?
+        temp_df.columns = labels
+        joined_df = pd.concat([df.drop(columns=[temp_col, 'temp_bin']), temp_df], axis=1)
+        return joined_df
 
 class SimpleOLS(Model):
     """
