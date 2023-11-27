@@ -10,6 +10,13 @@ from sklearn.preprocessing import OrdinalEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import cross_validate
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+
+# for interactive plotting while debugging in PyCharm
+plt.interactive(True)
+mpl.use('TkAgg')
+
 
 sys.path.append('')
 
@@ -250,9 +257,13 @@ class Model():
         self.savings_uncertainty = U
         self.fsu = U / (self.energy_savings)
 
-    def plot_modelset(self):
-        df_scatter = pd.concat([self.Y_train, self.y.test], axis=1)
-        df_scatter.plot.scatter('kWh', 'predicted', alpha=.2)
+    def scatterplot(self, x='actual', y='predicted', alpha=.25):
+        try:
+            df_scatter = self.dataset[[x, y]]
+        except KeyError:
+            df_scatter = pd.concat([self.Y.test, self.y.test], axis=1)
+            x, y = 'Btus', 'predicted'
+        df_scatter.plot.scatter(x=x, y=y, alpha=alpha, grid=True)
 
     def check_zeroes(self):
         '''A function for checking % dependent variable zeros found in the performance period against same % of
@@ -295,7 +306,7 @@ class TOWT(Model):
                 *args, **kwargs
             )
         # self.x.train, self.x.test = self.x.copy(), self.x.copy()
-        # self.Y_train, self.Y.test = self.Y.copy(), self.Y.copy()
+        # self.Y.train, self.Y.test = self.Y.copy(), self.Y.copy()
         self.type = 'towt'
         self.temp_bins = None
         try:
@@ -397,13 +408,13 @@ class TOWT(Model):
         Y_train = self.Y.truncate(before=before, after=after)
         self.x.train = x_train
         self.x.test = x_train
-        self.Y_train = Y_train
+        self.Y.train = Y_train
         self.Y.test = Y_train
 
     def run(self, on='train', start=None, end=None):
         x, bins = None, None
         if on == 'train':
-            x, Y = self.x.train, self.Y_train
+            x, Y = self.x.train, self.Y.train
             bins = 6 #ToDo: call this out
         elif on == 'test':
             x, Y = self.x.test, self.Y.test
@@ -429,13 +440,13 @@ class TOWT(Model):
         y = pd.Series(y, index=x.index, name='kW modeled')
         y[y < 0] = 0
         if on == 'train':
-            self.x.train, self.y.train, self.Y_train = x, y, Y
+            self.x.train, self.y.train, self.Y.train = x, y, Y
             self.reg = reg
         elif on == 'test':
             self.x.test, self.y.test, self.Y.test = x, y, Y
         elif on == 'predict':
             #ToDo: refactor / break out under a new function called prediction metrics or something
-            self.X_pred, self.y.pred, self.Y.pred = x, y, Y
+            self.X.pred, self.y.pred, self.Y.pred = x, y, Y
             self.kWh_performance_actual = Y.sum()
             self.kWh_performance_pred = y.sum()
             self.energy_savings = self.kWh_performance_pred - self.kWh_performance_actual
@@ -447,7 +458,7 @@ class TOWT(Model):
     def predict_recursive(self, x=None, Y=None):
         pass
 
-class TODTweekend(Model):
+class TODT(Model):
     """
 
     """
@@ -458,26 +469,24 @@ class TODTweekend(Model):
             super().__init__(dataset=df)
             self.set_from_df(df, Y_col, X_col)
             self.Y_col, self.X_col = Y_col, X_col
+        else:
+            raise Exception('TODT model requires pandas DataFrame as argument.')
 
     def train(self, bins=6):
-        df = self.add_TODTweekend_features(self.dataset, bins=bins)
+        df = self.add_TODT_features(self.dataset, bins=bins)
         Y = df.pop(self.Y_col)
         reg = LinearRegression().fit(df, Y)
         y_pred = reg.predict(df)
         self.reg = reg
-        self.y.test = pd.DataFrame(data=y_pred, index=Y.index)
+        self.y.test = pd.Series(data=y_pred, index=Y.index, name='predicted')
         self.Y.test = Y
         self.score()
 
     def test(self):
         pass
 
-    def add_TODTweekend_features(self, df, bins=6, temp_col=None):
-        """Based on LBNL-4944E: Time of Week & Temperature Model outlined in Quantifying Changes in Building Electricity Use
-        ... (2011, Mathieu et al). Given a time-series dataframe with outdoor air temperature column 'temp, this function
-        returns dataframe with 168 columns with boolean (0 or 1) for each hour of the week, plus 6 binned temperature
-        columns. Each column is intended to be a feature or independent variable of an ordinary least squares regression
-        model to determine hourly energy usage as a function of time of week and temperature.
+    def add_TODT_features(self, df, bins=6, temp_col=None):
+        """See TODT class method. Similar but only uses 24 hour-wise time factors per day rather than 168 per week.
 
         @param df: (pandas.DataFrame) must have datetime index and at least column 'temp'
         @param n_bins: (int) number of temperature bins. Per LBNL recommendation, default is 6.
@@ -812,7 +821,7 @@ class TreeTODT(Model):
             self.x.test, self.y.test, self.Y.test = x, y, Y
         elif on == 'predict':
             #ToDo: refactor / break out under a new function called prediction metrics or something
-            self.X_pred, self.y.pred, self.Y.pred = x, y, Y
+            self.X.pred, self.y.pred, self.Y.pred = x, y, Y
             self.kWh_performance_actual = Y.sum()
             self.kWh_performance_pred = y.sum()
             self.energy_savings = self.kWh_performance_pred - self.kWh_performance_actual
