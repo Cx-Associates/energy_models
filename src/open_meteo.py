@@ -14,8 +14,12 @@ forecast_url = f'https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude
                f'&temperature_unit=fahrenheit'
 
 
-def get_historic_url(location, time_frame, feature='temperature_2m'):
-    '''Given a time frame, get the historical weather
+def get_historic_url(
+        location,
+        time_frame,
+        feature='temperature_2m',
+):
+    '''Given a time frame, get the historical weather in UTC time.
 
     :param location
     :param time_frame: tuple
@@ -33,7 +37,7 @@ def get_historic_url(location, time_frame, feature='temperature_2m'):
     str_req = f'https://archive-api.open-meteo.com/v1/era5?latitude={lat}&longitude={long}' \
               f'&start_date={time_frame[0]}&end_date={time_frame[1]}' \
               f'&hourly={feature}' \
-              f'&temperature_unit=fahrenheit'
+              f'&temperature_unit=fahrenheit' \
 
     return str_req
 
@@ -57,10 +61,12 @@ def get_hist_and_forecast(past_days=14, forecast_days=14):
 def open_meteo_get(
         location=(lat, long),
         time_frame='forecast',
-        feature='temperature_2m'
+        feature='temperature_2m',
+        timezone='US/Eastern'
 ):
     """
 
+    :type time_frame: string
     :param time_frame:
     :param lat:
     :param long:
@@ -76,6 +82,7 @@ def open_meteo_get(
     dict_ = res.json()
     series = pd.Series(data=dict_['hourly']['temperature_2m'], index=dict_['hourly']['time'])
     series.index = pd.to_datetime(series.index)
+    series.index = series.index.tz_localize('UTC').tz_convert(timezone)
     series.name = feature
 
     return series

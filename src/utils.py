@@ -12,6 +12,7 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import cross_validate
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from .open_meteo import open_meteo_get
 
 # for interactive plotting while debugging in PyCharm
 plt.interactive(True)
@@ -103,6 +104,15 @@ def get_projected_year(tmy, history, forecast=None):
 
     return df
 
+class TimeFrame():
+    def __init__(self, arg):
+        if isinstance(arg, tuple):
+            self.tuple = arg
+            # ToDo: check for correct api formatting
+        elif isinstance(arg, str):
+            pass
+            # ToDO: auto-parse to ensure this is API-friendly
+            # ToDo: where should TZ localization take place? Project has coordinates ...
 
 class Dataset:
     """Generic dataset class comprising an energy time-series and a weather time-series.
@@ -160,7 +170,7 @@ class Dataset:
 
         try:
             self.temperature_series = df['temp']
-            self.x = self.temperature_series
+            self.X = self.temperature_series
         except KeyError:
             pass
         try:
@@ -194,35 +204,113 @@ class Model():
     """A child class of DataSet with attributes to use in modeling.
 
     """
-    def __init__(self, dataset=None):
+    def __init__(self, data=None, **kwargs):
         self.reg = None
         self.clf = None
         self.X, self.Y, self.y = Var(), Var(), Var()
+        self.Y_col = None
         self.performance_actual = None
         self.performance_pred = None
         self.rsq = None
         self.cvrmse = None
         self.savings_uncertainty = None
         self.fsu = None
-        if dataset is not None:
-            self.dataset = dataset
+        self.location = None
+        self.dataframe = None
+        self.weather_data = None
+        if data is not None:
+            if isinstance(data, pd.DataFrame):
+                self.dataframe = data
+            if not isinstance(data, list):
+                data = [data]
+            self.data = data
+        for key in kwargs:
+            self.__setattr__(key, kwargs[key])
 
     def set_from_df(self, df, Y_col, X_col):
         self.Y = Var(df[Y_col])
         self.X = Var(df[X_col])
 
+    def set_time_frames(self, **kwargs):
+        """
+
+        :param kwargs:
+        :return:
+        """
+        time_frames = {}
+        min_date, max_date = None, None
+        if self.data is not None:
+            # steps through all DataFrames in data argument (should be list) and sets the whole class's min,
+            # max dates based on the widest range of their timeseries indices.
+            for df in self.data:
+                if not isinstance(df, pd.DataFrame):
+                    raise ('In order to set time frames, all data passed into model.data must be type pd.DataFrame '
+                           'with Timeseries index.')
+                df.sort_index(inplace=True)
+                if min_date is None and max_date is None:
+                    min_date, max_date = df.index[0], df.index[-1]
+                else:
+                    this_min, this_max = df.index[0], df.index[-1]
+                    if this_min < min_date:
+                        min_date = this_min
+                    if this_max > max_date:
+                        max_date = this_max
+                total = TimeFrame((min_date, max_date))
+                time_frames.update({'total': total})
+        if "baseline" in kwargs.keys():
+            str_ = kwargs['baseline']
+            baseline = TimeFrame(str_)
+            time_frames.update({'baseline': baseline})
+            min_date, max_date = baseline.tuple[0], baseline.tuple[1]
+        if "performance" in kwargs.keys():
+            pass #ToDo: refactor above lines and repeat for performance and report
+        if "report" in kwargs.keys():
+            pass
+        if None in [min_date, max_date]:
+            raise('No time frames passed. Need any of: baseline, performance, or report kwargs.')
+        # for key, value in time_frames.items():
+        #     start, end = value.tuple[0], value.tuple[1]
+        #     if start < min_date:
+        #         min_date = start
+        #     if end > max_date:
+        #         max_date = end
+        # total = TimeFrame((min_date, max_date))
+        # time_frames.update({'total': total})
+        self.time_frames = time_frames
+
+    def join_weather_data(self, location=None, time_frame=None):
+        """
+
+        :param location:
+        :return:
+        """
+        if location is None:
+            location = self.location
+        if location is None:
+            raise Exception('Must pass lat, long location tuple into get_weather_data, either by setting it prior as '
+                            'a class attribute, or passing it explicitly as an argument.')
+        if time_frame is None:
+            time_frame = self.time_frames['total'].tuple
+            #ToDo: raise error if no index
+        s_weather = open_meteo_get(location, time_frame)
+        self.weather_data = s_weather
+        df = self.dataframe.resample('h').mean()
+        df = pd.concat([df, s_weather], axis=1)
+        df.dropna(inplace=True)
+        self.dataframe = df
+
     def set_balance_point(self, cooling=None, heating=None):
-        s = balance_point_transform(self.x['temp'], cooling)
-        self.x.train = self.x.copy()
-        self.x.train['temp_bp'] = s
-        self.x.test['temp_bp'] = s
+        s = balance_point_transform(self.X['temp'], cooling)
+        self.X.train = self.X.copy()
+        self.X.train['temp_bp'] = s
+        self.X.test['temp_bp'] = s
 
     def clear_balance_points(self):
-        if 'temp_bp' in self.x.columns:
-            self.x.drop(columns='temp_bp', inplace=True)
+        if 'temp_bp' in self.X.columns:
+            self.X.drop(columns='temp_bp', inplace=True)
         try:
-            if 'temp_bp' in self.x.train.columns:
-                self.x.train.drop(columns='temp_bp', inplace=True)
+            if 'temp_bp' in self.X.train.columns:
+                self.X.train.drop(columns='temp_bp', inplace=True)
         except AttributeError:
             pass
         self.bp_cooling = None
@@ -259,11 +347,11 @@ class Model():
 
     def scatterplot(self, x='actual', y='predicted', alpha=.25):
         try:
-            df_scatter = self.dataset[[x, y]]
+            df_scatter = self.dataframe[[x, y]]
         except KeyError:
             df_scatter = pd.concat([self.Y.test, self.y.test], axis=1)
-            x, y = 'Btus', 'predicted'
-        df_scatter.plot.scatter(x=x, y=y, alpha=alpha, grid=True)
+            df_scatter.columns = ['actual', 'predicted']
+        df_scatter.plot.scatter(x='actual', y='predicted', alpha=alpha, grid=True)
 
     def check_zeroes(self):
         '''A function for checking % dependent variable zeros found in the performance period against same % of
@@ -287,38 +375,11 @@ class TOWT(Model):
     """
     #ToDo: add interactive number of temp coefficients (LBNL suggests 6).
     def __init__(self, *args, **kwargs):
-        try:
-            if args:
-                arg_class = args[0].__class__
-                if type(arg_class) is Model or issubclass(arg_class, Model):
-                    self.__dict__ = args[0].__dict__.copy()
-                    self.__dict__.update(**kwargs)
-                else: #ToDo: clean this up; it is redundant with else clause a few lines below
-                    super().__init__(
-                        *args, **kwargs
-                    )
-        except IndexError:
-            # super().__init__(
-            #     args[0],
-            #     args[1]
-            # )
-            super().__init__(
-                *args, **kwargs
-            )
-        # self.x.train, self.x.test = self.x.copy(), self.x.copy()
-        # self.Y.train, self.Y.test = self.Y.copy(), self.Y.copy()
+        super().__init__(
+            *args, **kwargs
+        )
         self.type = 'towt'
         self.temp_bins = None
-        try:
-            self.truncate_baseline()
-        except AttributeError:
-            if 'df' in kwargs.keys():
-                df = kwargs['df']
-                self.train_start, self.train_end = df.index[0], df.index[-1]
-                self.truncate_baseline()
-            else:
-                raise('Because no truncating arguments (train_start, train_end) were supplied, args[0] must be type '
-                      'df.')
 
     def bin_temps(self, num=6):
         """Per LBNL
@@ -328,7 +389,7 @@ class TOWT(Model):
         """
         pass
 
-    def add_TOWT_features(self, df, bins=6):
+    def add_TOWT_features(self, df, bins=6, temp_col='temperature_2m'):
         """Based on LBNL-4944E: Time of Week & Temperature Model outlined in Quantifying Changes in Building Electricity Use
         ... (2011, Mathieu et al). Given a time-series dataframe with outdoor air temperature column 'temp, this function
         returns dataframe with 168 columns with boolean (0 or 1) for each hour of the week, plus 6 binned temperature
@@ -353,13 +414,13 @@ class TOWT(Model):
         # break temp into bins
         if type(bins) == np.int:
             n_bins = bins
-            min_temp, max_temp = np.floor(df['temp'].min()), np.ceil(df['temp'].max())
+            min_temp, max_temp = np.floor(df[temp_col].min()), np.ceil(df[temp_col].max())
             #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
             bin_size = (max_temp - min_temp) / (n_bins)
             temp_bins = np.arange(min_temp, max_temp, bin_size)
             temp_bins = list(np.append(temp_bins, max_temp))
-            labels, labels_index = self.TOWT_column_labels(n_bins)
-            df['temp_bin'] = pd.cut(df['temp'], bins, labels=labels_index)
+            labels, labels_index = TOxT_column_labels(n_bins)
+            df['temp_bin'] = pd.cut(df[temp_col], bins, labels=labels_index)
             self.temp_bins = temp_bins
         elif bins == 'from train':
             # This handles cases where the range of test data may exceed range of train data.
@@ -367,10 +428,10 @@ class TOWT(Model):
             n_bins = len(temp_bins) - 1
             labels, labels_index = self.TOWT_column_labels(n_bins)
             old_min_temp, old_max_temp = temp_bins[0], temp_bins[-1]
-            min_temp = np.floor(df['temp'].min())
+            min_temp = np.floor(df[temp_col].min())
             #ToDo: need floor and ceiling arguments? Or can we not use floats, or are floats problematic?
             temp_bins[0] = min_temp
-            df['temp_bin'] = pd.cut(df['temp'], temp_bins, labels=labels_index)
+            df['temp_bin'] = pd.cut(df[temp_col], temp_bins, labels=labels_index)
             df.fillna(0, inplace=True)
         temp_df = pd.DataFrame(columns=labels_index, index=df.index)
         bin_deltas = list(np.array(temp_bins[1:]) - np.array(temp_bins[:-1]))
@@ -382,14 +443,14 @@ class TOWT(Model):
             temp_row.loc[left_cols] = write_list
             temp_df.loc[index] = temp_row
             bin_bottom = temp_bins[colname]
-            temp_df[colname].loc[index] = row['temp'] - bin_bottom
+            temp_df[colname].loc[index] = row[temp_col] - bin_bottom
         if bins == 'from train':
             adj_amt = old_min_temp - min_temp
             temp_df[0] -= adj_amt
 
         temp_df.fillna(0, inplace=True)
         temp_df.columns = labels
-        joined_df = pd.concat([df.drop(columns=['temp', 'temp_bin']), temp_df], axis=1)
+        joined_df = pd.concat([df.drop(columns=[temp_col, 'temp_bin']), temp_df], axis=1)
         return joined_df
 
     def truncate_baseline(self, before=None, after=None):
@@ -404,49 +465,49 @@ class TOWT(Model):
             before = self.train_start
         if after is None:
             after = self.train_end
-        x_train = self.x.truncate(before=before, after=after)
+        X_train = self.X.truncate(before=before, after=after)
         Y_train = self.Y.truncate(before=before, after=after)
-        self.x.train = x_train
-        self.x.test = x_train
+        self.X.train = X_train
+        self.X.test = X_train
         self.Y.train = Y_train
         self.Y.test = Y_train
 
     def run(self, on='train', start=None, end=None):
-        x, bins = None, None
+        X, bins = None, None
         if on == 'train':
-            x, Y = self.x.train, self.Y.train
+            X, Y = self.X.train, self.Y.train
             bins = 6 #ToDo: call this out
         elif on == 'test':
-            x, Y = self.x.test, self.Y.test
+            X, Y = self.X.test, self.Y.test
             bins = 'from train'
         elif on == 'predict': #ToDo: add hard stop so you cannot cast prediction onto baseline period
-            x = self.x.truncate(start, end)
+            X = self.X.truncate(start, end)
             Y = self.Y.truncate(start, end)
             bins = 'from train'
         elif on == 'normalize':
-            x = self.x.norm
+            X = self.X.norm
             bins = 'from train'
-        x = self.add_TOWT_features(x, bins=bins)
+        X = self.add_TOWT_features(X, bins=bins)
         if on in {'test', 'predict', 'normalize'}:
-            x = x[self.x.train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
+            X = X[self.X.train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
         if on == 'train':
-            reg = LinearRegression().fit(x, Y)
+            reg = LinearRegression().fit(X, Y)
         else:
             reg = self.reg
         #ToDO: below won't work without add_TOW features first eh? maybe do some error catching
         #ToDo: also add exception or notification for truncating baseline
-        y = reg.predict(x)
+        y = reg.predict(X)
         # y = pd.DataFrame(y, index=X.index, columns=['predicted'])
-        y = pd.Series(y, index=x.index, name='kW modeled')
+        y = pd.Series(y, index=X.index, name='kW modeled')
         y[y < 0] = 0
         if on == 'train':
-            self.x.train, self.y.train, self.Y.train = x, y, Y
+            self.X.train, self.y.train, self.Y.train = X, y, Y
             self.reg = reg
         elif on == 'test':
-            self.x.test, self.y.test, self.Y.test = x, y, Y
+            self.X.test, self.y.test, self.Y.test = X, y, Y
         elif on == 'predict':
             #ToDo: refactor / break out under a new function called prediction metrics or something
-            self.X.pred, self.y.pred, self.Y.pred = x, y, Y
+            self.X.pred, self.y.pred, self.Y.pred = X, y, Y
             self.kWh_performance_actual = Y.sum()
             self.kWh_performance_pred = y.sum()
             self.energy_savings = self.kWh_performance_pred - self.kWh_performance_actual
@@ -455,7 +516,19 @@ class TOWT(Model):
         elif on == 'normalize':
             self.y.norm = y
 
-    def predict_recursive(self, x=None, Y=None):
+    def train(self, bins=6):
+        before, after = self.time_frames['baseline'].tuple[0], self.time_frames['baseline'].tuple[1]
+        df = self.dataframe.truncate(before=before, after=after)
+        df = self.add_TOWT_features(df, bins=bins)
+        Y = df.pop(self.Y_col)
+        reg = LinearRegression().fit(df, Y)
+        y_pred = reg.predict(df)
+        self.reg = reg
+        self.y.test = pd.Series(data=y_pred, index=Y.index, name='predicted')
+        self.Y.test = Y
+        self.score()
+
+    def predict_recursive(self, X=None, Y=None):
         pass
 
 class TODT(Model):
@@ -572,16 +645,16 @@ class SimpleOLS(Model):
     def run(self, on='train', start=None, end=None):
         if on == 'train':
             if start is None and end is None:
-                x = pd.DataFrame(self.x)
+                X = pd.DataFrame(self.X)
                 Y = pd.DataFrame(self.Y)
-                reg = LinearRegression().fit(x, Y)
-                y = reg.predict(x)
+                reg = LinearRegression().fit(X, Y)
+                y = reg.predict(X)
                 y = pd.DataFrame(y, index=x.index).rename(columns={0: 'kWh_predicted'})
-                self.x.train, self.y.train, self.Y.train = x, y, Y
+                self.X.train, self.y.train, self.Y.train = x, y, Y
                 self.Y.test, self.y.test = self.Y.train, self.y.train
                 self.reg = reg
         elif on == 'predict':
-            x_pred = pd.DataFrame(self.x.pred)
+            x_pred = pd.DataFrame(self.X.pred)
             y = self.reg.predict(x_pred)
             self.y.pred = pd.DataFrame(y, index=x_pred.index)
 
@@ -696,7 +769,7 @@ class TreeTODT(Model):
         self.df_joined = df.copy()
         # drop nans resulting from the shifts in the x and Y properties only.
         df.dropna(inplace=True)
-        self.x = df.drop(columns=colname)
+        self.X = df.drop(columns=colname)
         self.Y = df[colname]
 
         return df
@@ -707,9 +780,9 @@ class TreeTODT(Model):
         :return:
         '''
         test_size = .5
-        x_train, x_test, Y_train, Y_test = train_test_split(self.x, self.Y, test_size=test_size)
+        x_train, x_test, Y_train, Y_test = train_test_split(self.X, self.Y, test_size=test_size)
         #ToDo: double check above line is safe as far as splitting both x and Y.
-        self.x.train, self.x.test, self.Y.train, self.Y.test = x_train, x_test, Y_train, Y_test
+        self.X.train, self.X.test, self.Y.train, self.Y.test = x_train, x_test, Y_train, Y_test
 
     def ensemble_tree(self, run='train', tree_feature_colnames=None):
         '''
@@ -728,21 +801,22 @@ class TreeTODT(Model):
                 'diff4',
                 # 'HP_outdoor_rolling'
             ]
-        xa = self.x.drop(columns=tree_feature_colnames)
+        Xa = self.X.drop(columns=tree_feature_colnames)
         reg = LinearRegression().fit(xa, self.Y)
         ya = reg.predict(xa)
-        ya = pd.DataFrame(ya, index=self.x.index)
-        xb = ya.join(self.x[tree_feature_colnames])
+        ya = pd.DataFrame(ya, index=self.X.index)
+        Xb = ya.join(self.X[tree_feature_colnames])
         test_size = .5
         # x.train, x.test, Y.train, Y.test = train_test_split(xb, self.Y, test_size=test_size)
         # treereg = DecisionTreeRegressor().fit(x.train, self.Y.train)
-        gbreg = HistGradientBoostingRegressor().fit(xb, self.Y)
-        yb = gbreg.predict(xb)
+        gbreg = HistGradientBoostingRegressor().fit(Xb, self.Y)
+        yb = gbreg.predict(Xb)
         self.reg = gbreg
         self.reg_colnames = tree_feature_colnames
-        self.y.test = pd.DataFrame(yb, index=xb.index)
+        self.y.test = pd.DataFrame(yb, index=Xb.index)
         if run == 'predict':
-            xa_future
+            pass
+            # Xa_future
 
     def gradient_boost(self):
         gb_feature_colnames = [
@@ -756,7 +830,7 @@ class TreeTODT(Model):
             'diff4',
             'HP_outdoor_rolling'
         ]
-        x = self.x[gb_feature_colnames]
+        X = self.X[gb_feature_colnames]
         categorical_columns = [
             'TOD',
             # 'diff1',
@@ -787,22 +861,22 @@ class TreeTODT(Model):
 
 
     def run(self, on='train', start=None, end=None):
-        x, bins = None, None
+        X, bins = None, None
         if on == 'train':
-            x, Y = self.x.train, self.Y.train
+            X, Y = self.X.train, self.Y.train
             bins = 6 #ToDo: call this out
         elif on == 'test':
-            x, Y = self.x.test, self.Y.test
+            X, Y = self.X.test, self.Y.test
             bins = 'from train'
         elif on == 'predict': #ToDo: add hard stop so you cannot cast prediction onto baseline period
-            x = self.x.truncate(start, end)
+            X = self.X.truncate(start, end)
             Y = self.Y.truncate(start, end)
             bins = 'from train'
         elif on == 'normalize':
-            x = self.x.norm
+            X = self.X.norm
             bins = 'from train'
         if on in {'test', 'predict', 'normalize'}:
-            x = x[self.x.train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
+            X = X[self.X.train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
         if on == 'train':
             self.ensemble_tree()
             # self.gradient_boost()
@@ -815,10 +889,10 @@ class TreeTODT(Model):
         y = pd.Series(y, index=x.index, name='kW modeled')
         y[y < 0] = 0
         if on == 'train':
-            self.x.train, self.y.train, self.Y.train = x, y, Y
+            self.X.train, self.y.train, self.Y.train = x, y, Y
             self.reg = reg
         elif on == 'test':
-            self.x.test, self.y.test, self.Y.test = x, y, Y
+            self.X.test, self.y.test, self.Y.test = x, y, Y
         elif on == 'predict':
             #ToDo: refactor / break out under a new function called prediction metrics or something
             self.X.pred, self.y.pred, self.Y.pred = x, y, Y
