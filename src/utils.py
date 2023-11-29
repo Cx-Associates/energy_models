@@ -227,6 +227,8 @@ class Model():
         for key in kwargs:
             self.__setattr__(key, kwargs[key])
 
+        self.set_time_frames()
+
     def set_from_df(self, df, Y_col, X_col):
         self.Y = Var(df[Y_col])
         self.X = Var(df[X_col])
@@ -352,6 +354,24 @@ class Model():
             df_scatter = pd.concat([self.Y.test, self.y.test], axis=1)
             df_scatter.columns = ['actual', 'predicted']
         df_scatter.plot.scatter(x='actual', y='predicted', alpha=alpha, grid=True)
+
+    def timeplot(self,
+                 x='actual',
+                 y='predicted',
+                 weather=False,
+                 alpha=.9):
+        try:
+            df = self.dataframe[[x, y]]
+        except KeyError:
+            df = pd.concat([self.Y.test, self.y.test], axis=1)
+            df.columns = ['actual', 'predicted']
+        if weather == True:
+            df['OAT'] = self.dataframe['temperature_2m']
+            df.plot(alpha=alpha, grid=True, secondary_y='OAT')
+        else:
+            df.plot(alpha=alpha, grid=True)
+
+
 
     def check_zeroes(self):
         '''A function for checking % dependent variable zeros found in the performance period against same % of
@@ -535,30 +555,39 @@ class TODT(Model):
     """
 
     """
-    def __init__(self, df, Y_col='kWh', X_col='OAT'):
+    # def __init__(
+    #         self,
+    #         df,
+    #         Y_col='kW',
+    #         X_col='OAT',
+    #         weekend=False,
+    # ):
+    #     self.temp_bins = None
+    #     self.data = None
+    #     self.weekend = weekend,
+    #     self.features = False
+    #     if isinstance(df, pd.DataFrame):
+    #         super().__init__(dataset=df)
+    #         try:
+    #             self.set_from_df(df, Y_col, X_col)
+    #         except KeyError:
+    #             pass
+    #         self.Y_col, self.X_col = Y_col, X_col
+    #     else:
+    #         raise Exception('TODT model requires pandas DataFrame as argument.')
+    def __init__(self, *args, **kwargs):
+        super().__init__(
+            *args, **kwargs
+        )
+        self.type = 'todt'
         self.temp_bins = None
-        self.data = None
-        if isinstance(df, pd.DataFrame):
-            super().__init__(dataset=df)
-            self.set_from_df(df, Y_col, X_col)
-            self.Y_col, self.X_col = Y_col, X_col
-        else:
-            raise Exception('TODT model requires pandas DataFrame as argument.')
 
-    def train(self, bins=6):
-        df = self.add_TODT_features(self.dataset, bins=bins)
-        Y = df.pop(self.Y_col)
-        reg = LinearRegression().fit(df, Y)
-        y_pred = reg.predict(df)
-        self.reg = reg
-        self.y.test = pd.Series(data=y_pred, index=Y.index, name='predicted')
-        self.Y.test = Y
-        self.score()
-
-    def test(self):
-        pass
-
-    def add_TODT_features(self, df, bins=6, temp_col=None):
+    def add_TODT_features(
+            self,
+            df_=None,
+            bins=6,
+            temp_col=None
+    ):
         """See TODT class method. Similar but only uses 24 hour-wise time factors per day rather than 168 per week.
 
         @param df: (pandas.DataFrame) must have datetime index and at least column 'temp'
@@ -566,13 +595,17 @@ class TODT(Model):
         @return: (pandas.DataFrame) augmented with features as new columns. original temperature column is dropped.
         """
         # add time of week features
-        if temp_col == None:
+        if df_ is None:
+            df = self.dataframe
+        else:
+            df = df_
+        if temp_col is None:
             temp_col = self.X_col
         TOD = df.index.hour
-        TODdf = pd.DataFrame(0, columns=TOD.unique(), index=df.index)
+        TODdf = pd.DataFrame(0.0, columns=TOD.unique(), index=df.index)
         for index, row in TODdf.iterrows():
             tod = index.hour
-            TODdf[tod].loc[index] = 1
+            TODdf[tod].loc[index] = 1.0
         labels = ['h' + str(x) for x in TODdf.columns]
         TODdf.columns = labels
         df = df.join(TODdf)
@@ -621,7 +654,35 @@ class TODT(Model):
         temp_df.fillna(0, inplace=True) #ToDo: not safe?
         temp_df.columns = labels
         joined_df = pd.concat([df.drop(columns=[temp_col, 'temp_bin']), temp_df], axis=1)
-        return joined_df
+        if self.weekend == True:
+            joined_df['weekend'] = 0.0
+            joined_df['weekend'][joined_df.index.dayofweek > 4] = 1.0
+        self.features = True
+
+        if df_ is None:
+            self.dataframe = joined_df
+        else:
+            return joined_df
+
+    def add_exceptions(self, holidays=[], exceptions=[]):
+        pass
+
+
+    def train(self, df=None, bins=6):
+        if not self.features:
+            df = self.add_TODT_features(self.dataframe, bins=bins)
+        if df is None:
+            df = self.dataframe
+        Y = df.pop(self.Y_col)
+        reg = LinearRegression().fit(df, Y)
+        y_pred = reg.predict(df)
+        self.reg = reg
+        self.y.test = pd.Series(data=y_pred, index=Y.index, name='predicted')
+        self.Y.test = Y
+        self.score()
+
+    def test(self):
+        pass
 
 class SimpleOLS(Model):
     """
