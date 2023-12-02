@@ -218,6 +218,7 @@ class Model():
         self.location = None
         self.dataframe = None
         self.weather_data = None
+        self.data = None
         if data is not None:
             if isinstance(data, pd.DataFrame):
                 self.dataframe = data
@@ -269,7 +270,8 @@ class Model():
         if "report" in kwargs.keys():
             pass
         if None in [min_date, max_date]:
-            raise('No time frames passed. Need any of: baseline, performance, or report kwargs.')
+            print('!! No time frames passed. Need any of: baseline, performance, or report kwargs. This model '
+                  'instance still needs time frames to be set.')
         # for key, value in time_frames.items():
         #     start, end = value.tuple[0], value.tuple[1]
         #     if start < min_date:
