@@ -200,22 +200,28 @@ class Var():
         self.pred = None
         self.norm = None
 
+class Scores():
+    """
+
+    """
+    def __init__(self):
+        self.rsq = None
+        self.cvrmse = None
+        self.savings_uncertainty = None
+        self.fsu = None
+
 class Model():
     """A child class of DataSet with attributes to use in modeling.
 
     """
     def __init__(self, data=None, **kwargs):
-        self.reg = None
-        self.clf = None
+        self.reg = None  # or self.clf?
         self.X, self.Y, self.y = Var(), Var(), Var()
+        self.scores = Scores()
         self.Y_col = None
         self.performance_actual = None
         self.performance_pred = None
-        self.rsq = None
-        self.cvrmse = None
-        self.savings_uncertainty = None
-        self.fsu = None
-        self.location = None
+        self.location = ()
         self.dataframe = None
         self.weather_data = None
         self.data = None
@@ -325,11 +331,11 @@ class Model():
         :return:
         """
         rsq = r2_score(self.Y.test, self.y.test)
-        self.rsq = rsq
+        self.scores.rsq = rsq
 
         mse = mean_squared_error(self.Y.test, self.y.test)
         cvrmse = np.sqrt(mse) / np.mean(self.Y.test)
-        self.cvrmse = cvrmse
+        self.scores.cvrmse = cvrmse
 
         self.ndbe = (self.Y.test.sum() - self.y.test.sum()) / self.Y.test.sum()
 
@@ -343,11 +349,11 @@ class Model():
         n = len(self.Y.train)  # ToDo: check if this holds for models requiring train/test split
         m = len(self.y.pred)
 
-        U = t * (1.26 * self.cvrmse / F * np.sqrt((n + 2) / (n * m)))
+        U = t * (1.26 * self.scores.cvrmse / F * np.sqrt((n + 2) / (n * m)))
         #ToDo: check this in general
 
-        self.savings_uncertainty = U
-        self.fsu = U / (self.energy_savings)
+        self.scores.savings_uncertainty = U
+        self.scores.fsu = U / (self.energy_savings)
 
     def scatterplot(self, x='actual', y='predicted', alpha=.25):
         try:
@@ -396,10 +402,13 @@ class TOWT(Model):
 
     """
     #ToDo: add interactive number of temp coefficients (LBNL suggests 6).
-    def __init__(self, *args, **kwargs):
-        super().__init__(
-            *args, **kwargs
-        )
+    def __init__(self, model=None, *args, **kwargs):
+        if model is not None:
+            self.__dict__ = model.__dict__
+        else:
+            super().__init__(
+                *args, **kwargs
+            )
         self.type = 'towt'
         self.temp_bins = None
 
@@ -430,7 +439,7 @@ class TOWT(Model):
             TOWdf[tow].loc[index] = 1
         labels = ['h' + str(x) for x in TOWdf.columns]
         TOWdf.columns = labels
-        df = df.join(TOWdf)
+        df = pd.concat([df, TOWdf], axis=1)
         df.dropna(inplace=True)
 
         # break temp into bins
@@ -538,7 +547,8 @@ class TOWT(Model):
         elif on == 'normalize':
             self.y.norm = y
 
-    def train(self, bins=6):
+    def train(self, bins=6, Y_col=None):
+        # ToDo: make this friendly to the self.X and self.Y methods again. Maybe permanently
         before, after = self.time_frames['baseline'].tuple[0], self.time_frames['baseline'].tuple[1]
         df = self.dataframe.truncate(before=before, after=after)
         df = self.add_TOWT_features(df, bins=bins)

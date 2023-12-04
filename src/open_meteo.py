@@ -79,6 +79,9 @@ def open_meteo_get(
         url = get_historic_url(location, time_frame, feature)
 
     res = requests.get(url)
+    if res.status_code != 200:
+        msg = f"Couldn't complete Open-Meteo API weather request. \n {res.reason} \n {res.content}"
+        raise Exception(msg)
     dict_ = res.json()
     series = pd.Series(data=dict_['hourly']['temperature_2m'], index=dict_['hourly']['time'])
     series.index = pd.to_datetime(series.index)
