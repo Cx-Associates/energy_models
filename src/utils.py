@@ -402,13 +402,10 @@ class TOWT(Model):
 
     """
     #ToDo: add interactive number of temp coefficients (LBNL suggests 6).
-    def __init__(self, model=None, *args, **kwargs):
-        if model is not None:
-            self.__dict__ = model.__dict__
-        else:
-            super().__init__(
-                *args, **kwargs
-            )
+    def __init__(self, *args, **kwargs):
+        super().__init__(
+            *args, **kwargs
+        )
         self.type = 'towt'
         self.temp_bins = None
 
@@ -482,6 +479,14 @@ class TOWT(Model):
         temp_df.fillna(0, inplace=True)
         temp_df.columns = labels
         joined_df = pd.concat([df.drop(columns=[temp_col, 'temp_bin']), temp_df], axis=1)
+        dense_df = joined_df.dropna()
+        na_df = df[~df.index.isin(dense_df.index)]
+        if len(na_df > 0):
+            print(f'Dropped {len(na_df)} rows of NaN values from dataframe before storing X and Y values.')
+            print(f'Dropped dataframe: \n {na_df}')
+        self.Y.data = dense_df[self.Y_col]
+        self.X.data = dense_df.drop(columns=self.Y_col)
+
         return joined_df
 
     def truncate_baseline(self, before=None, after=None):
@@ -547,17 +552,18 @@ class TOWT(Model):
         elif on == 'normalize':
             self.y.norm = y
 
-    def train(self, bins=6, Y_col=None):
+    def train(self, bins=6):
         # ToDo: make this friendly to the self.X and self.Y methods again. Maybe permanently
         before, after = self.time_frames['baseline'].tuple[0], self.time_frames['baseline'].tuple[1]
-        df = self.dataframe.truncate(before=before, after=after)
-        df = self.add_TOWT_features(df, bins=bins)
-        Y = df.pop(self.Y_col)
-        reg = LinearRegression().fit(df, Y)
-        y_pred = reg.predict(df)
+        X = self.X.data.truncate(before=before, after=after)
+        Y = self.Y.data.truncate(before=before, after=after)  #ToDo: figure out how to handle
+        # resample
+        reg = LinearRegression().fit(X, Y)
+        y_pred = reg.predict(X)
         self.reg = reg
         self.y.test = pd.Series(data=y_pred, index=Y.index, name='predicted')
-        self.Y.test = Y
+        self.Y.test, self.Y.train = Y, Y
+        self.X.test, self.X.train = X, X
         self.score()
 
     def predict_recursive(self, X=None, Y=None):
@@ -587,12 +593,13 @@ class TODT(Model):
     #         self.Y_col, self.X_col = Y_col, X_col
     #     else:
     #         raise Exception('TODT model requires pandas DataFrame as argument.')
-    def __init__(self, *args, **kwargs):
+    def __init__(self, weekend=False, *args, **kwargs):
         super().__init__(
             *args, **kwargs
         )
         self.type = 'todt'
         self.temp_bins = None
+        self.weekend = weekend
 
     def add_TODT_features(
             self,
