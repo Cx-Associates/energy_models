@@ -206,7 +206,7 @@ class Model():
     """
     def __init__(self, data=None, **kwargs):
         self.reg = None
-        self.clf = None
+        # self.clf = None
         self.X, self.Y, self.y = Var(), Var(), Var()
         self.Y_col = None
         self.performance_actual = None
@@ -300,6 +300,7 @@ class Model():
         df = pd.concat([df, s_weather], axis=1)
         df.dropna(inplace=True)
         self.dataframe = df
+        self.data.append(df)
 
     def set_balance_point(self, cooling=None, heating=None):
         s = balance_point_transform(self.X['temp'], cooling)
@@ -347,7 +348,11 @@ class Model():
         self.savings_uncertainty = U
         self.fsu = U / (self.energy_savings)
 
-    def scatterplot(self, x='actual', y='predicted', alpha=.25):
+    def scatterplot(self,
+                    x='actual',
+                    y='predicted',
+                    alpha=.25
+                    ):
         try:
             df_scatter = self.dataframe[[x, y]]
         except KeyError:
@@ -358,15 +363,17 @@ class Model():
     def timeplot(self,
                  x='actual',
                  y='predicted',
-                 weather=False,
-                 alpha=.9):
+                 weather=True,
+                 alpha=.9
+                 ):
         try:
             df = self.dataframe[[x, y]]
         except KeyError:
             df = pd.concat([self.Y.test, self.y.test], axis=1)
             df.columns = ['actual', 'predicted']
         if weather == True:
-            df['OAT'] = self.dataframe['temperature_2m']
+            try:
+                df['OAT'] = self.dataframe['temperature_2m']
             df.plot(alpha=alpha, grid=True, secondary_y='OAT')
         else:
             df.plot(alpha=alpha, grid=True)
@@ -675,10 +682,11 @@ class TODT(Model):
             df = self.dataframe
         Y = df.pop(self.Y_col)
         reg = LinearRegression().fit(df, Y)
+        self.X.train, self.X.test = df
         y_pred = reg.predict(df)
         self.reg = reg
         self.y.test = pd.Series(data=y_pred, index=Y.index, name='predicted')
-        self.Y.test = Y
+        self.Y.train, self.Y.test = Y
         self.score()
 
     def test(self):
