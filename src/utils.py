@@ -332,9 +332,17 @@ class Model():
 
         :return:
         """
-        before, after = self.time_frames['baseline'].tuple[0], self.time_frames['baseline'].tuple[1]
-        X = self.X.data.truncate(before=before, after=after)
-        Y = self.Y.data.truncate(before=before, after=after)  #ToDo: figure out how to handle
+        if self.X.train is None:
+            try:
+                before, after = self.time_frames['baseline'].tuple[0], self.time_frames['baseline'].tuple[1]
+                X = self.X.data.truncate(before=before, after=after)
+                Y = self.Y.data.truncate(before=before, after=after)
+            except KeyError:
+                print('!! No baseline period in time_frames attribute. Model will be trained on entire length of time.')
+                X, Y = self.X.data, self.Y.data
+            # ToDo: prune X or Y to ensure they're same length
+        else:
+            X, Y = self.X.train, self.Y.train
         reg = LinearRegression().fit(X, Y)
         y_pred = reg.predict(X)
         self.reg = reg
@@ -729,7 +737,23 @@ class TODT(Model):
 
 
     def add_exceptions(self, holidays=[], exceptions=[]):
-        pass
+        '''Holidays will become an added binary factor, and exceptions will be dropped from training set.
+
+        :param holidays:
+        :param exceptions:
+        :return:
+        '''
+        from src.config import holidays_list, exceptions_list
+        holidays, exceptions = holidays_list, exceptions_list
+        X, Y = self.X.train, self.Y.train
+        X['holiday'] = 0.0
+        for holiday in holidays:
+            X[holiday[0]:holiday[1]] = 1.0
+        for exception in exceptions:
+            X = X[(X.index < exception[0]) | (X.index > exception[1])]
+            Y = Y[(X.index < exception[0]) | (X.index > exception[1])]
+        self.X.train, self.Y.train = X, Y
+
 
     def test(self):
         pass
