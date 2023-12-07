@@ -217,7 +217,7 @@ class Model():
     def __init__(self, data=None, **kwargs):
         self.reg = None  # or self.clf?
         self.X, self.Y, self.y = Var(), Var(), Var()
-        self.scores = Scores()
+        self.scores = {}
         self.Y_col = None
         self.performance_actual = None
         self.performance_pred = None
@@ -225,6 +225,7 @@ class Model():
         self.dataframe = None
         self.weather_data = None
         self.data = None
+        self.frequency = 'hourly'
         if data is not None:
             if isinstance(data, pd.DataFrame):
                 self.dataframe = data
@@ -325,19 +326,45 @@ class Model():
             pass
         self.bp_cooling = None
 
+    def train(self):
+        """Setting train and test arrays the same is acceptable for models that don't need to split train and test
+        sets, e.g. acceptable for ordinary least squares linear regression.
+
+        :return:
+        """
+        before, after = self.time_frames['baseline'].tuple[0], self.time_frames['baseline'].tuple[1]
+        X = self.X.data.truncate(before=before, after=after)
+        Y = self.Y.data.truncate(before=before, after=after)  #ToDo: figure out how to handle
+        reg = LinearRegression().fit(X, Y)
+        y_pred = reg.predict(X)
+        self.reg = reg
+        self.y.test = pd.Series(data=y_pred, index=Y.index, name='predicted')
+        self.Y.test, self.Y.train = Y, Y
+        self.X.test, self.X.train = X, X
+        self.score()
+
     def score(self):
         """
 
         :return:
         """
-        rsq = r2_score(self.Y.test, self.y.test)
-        self.scores.rsq = rsq
-
-        mse = mean_squared_error(self.Y.test, self.y.test)
-        cvrmse = np.sqrt(mse) / np.mean(self.Y.test)
-        self.scores.cvrmse = cvrmse
-
-        self.ndbe = (self.Y.test.sum() - self.y.test.sum()) / self.Y.test.sum()
+        if self.frequency == 'hourly':
+            self.scores['hourly'] = Scores()
+            rsq = r2_score(self.Y.test, self.y.test)
+            self.scores['hourly'].rsq = rsq
+            mse = mean_squared_error(self.Y.test, self.y.test)
+            cvrmse = np.sqrt(mse) / np.mean(self.Y.test)
+            self.scores['hourly'].cvrmse = cvrmse
+            self.scores['hourly'].ndbe = (self.Y.test.sum() - self.y.test.sum()) / self.Y.test.sum()
+        Ytest_daily = self.Y.test.resample('d').mean()
+        ytest_daily = self.y.test.resample('d').mean()
+        self.scores['daily'] = Scores()
+        rsq_daily = r2_score(Ytest_daily, ytest_daily)
+        self.scores['daily'].rsq = rsq_daily
+        mse_daily = mean_squared_error(Ytest_daily, ytest_daily)
+        cvrmse_daily = np.sqrt(mse_daily) / np.mean(ytest_daily)
+        self.scores['daily'].cvrmse = cvrmse_daily
+        self.scores['daily'].ndbe = (Ytest_daily.sum() - ytest_daily.sum()) / Ytest_daily.sum()
 
     def prediction_metrics(self):
         """
@@ -355,13 +382,18 @@ class Model():
         self.scores.savings_uncertainty = U
         self.scores.fsu = U / (self.energy_savings)
 
-    def scatterplot(self, x='actual', y='predicted', alpha=.25):
+    def scatterplot(self,
+                    x='actual',
+                    y='predicted',
+                    alpha=.25):
         try:
             df_scatter = self.dataframe[[x, y]]
         except KeyError:
             df_scatter = pd.concat([self.Y.test, self.y.test], axis=1)
             df_scatter.columns = ['actual', 'predicted']
-        df_scatter.plot.scatter(x='actual', y='predicted', alpha=alpha, grid=True)
+        ax = df_scatter.plot.scatter(x='actual', y='predicted', alpha=alpha, grid=True)
+        plt.axline((0,0), slope=1, linestyle='--', color='gray')
+        plt.show()
 
     def timeplot(self,
                  x='actual',
@@ -378,6 +410,23 @@ class Model():
             df.plot(alpha=alpha, grid=True, secondary_y='OAT')
         else:
             df.plot(alpha=alpha, grid=True)
+
+    def dayplot(self,
+                x='actual',
+                y='predicted',
+                weather=False
+                ):
+        try:
+            df = self.dataframe[[x, y]]
+        except KeyError:
+            df = pd.concat([self.Y.test, self.y.test], axis=1)
+            df.columns = ['actual', 'predicted']
+        if weather == True:
+            df['OAT'] = self.dataframe['temperature_2m']
+        df = df.resample('d').mean()
+        df.index = df.index.date
+        df.plot.bar(rot=90, grid=True)
+
 
 
 
@@ -552,20 +601,6 @@ class TOWT(Model):
         elif on == 'normalize':
             self.y.norm = y
 
-    def train(self, bins=6):
-        # ToDo: make this friendly to the self.X and self.Y methods again. Maybe permanently
-        before, after = self.time_frames['baseline'].tuple[0], self.time_frames['baseline'].tuple[1]
-        X = self.X.data.truncate(before=before, after=after)
-        Y = self.Y.data.truncate(before=before, after=after)  #ToDo: figure out how to handle
-        # resample
-        reg = LinearRegression().fit(X, Y)
-        y_pred = reg.predict(X)
-        self.reg = reg
-        self.y.test = pd.Series(data=y_pred, index=Y.index, name='predicted')
-        self.Y.test, self.Y.train = Y, Y
-        self.X.test, self.X.train = X, X
-        self.score()
-
     def predict_recursive(self, X=None, Y=None):
         pass
 
@@ -593,13 +628,16 @@ class TODT(Model):
     #         self.Y_col, self.X_col = Y_col, X_col
     #     else:
     #         raise Exception('TODT model requires pandas DataFrame as argument.')
-    def __init__(self, weekend=False, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(
             *args, **kwargs
         )
         self.type = 'todt'
         self.temp_bins = None
-        self.weekend = weekend
+        if 'weekend' in kwargs:
+            self.weekend = kwargs['weekend']
+        else:
+            self.weekend = False
 
     def add_TODT_features(
             self,
@@ -677,28 +715,21 @@ class TODT(Model):
             joined_df['weekend'] = 0.0
             joined_df['weekend'][joined_df.index.dayofweek > 4] = 1.0
         self.features = True
-
+        dense_df = joined_df.dropna()
+        na_df = df[~df.index.isin(dense_df.index)]
+        if len(na_df > 0):
+            print(f'Dropped {len(na_df)} rows of NaN values from dataframe before storing X and Y values.')
+            print(f'Dropped dataframe: \n {na_df}')
+        self.Y.data = dense_df[self.Y_col]
+        self.X.data = dense_df.drop(columns=self.Y_col)
         if df_ is None:
             self.dataframe = joined_df
         else:
             return joined_df
 
+
     def add_exceptions(self, holidays=[], exceptions=[]):
         pass
-
-
-    def train(self, df=None, bins=6):
-        if not self.features:
-            df = self.add_TODT_features(self.dataframe, bins=bins)
-        if df is None:
-            df = self.dataframe
-        Y = df.pop(self.Y_col)
-        reg = LinearRegression().fit(df, Y)
-        y_pred = reg.predict(df)
-        self.reg = reg
-        self.y.test = pd.Series(data=y_pred, index=Y.index, name='predicted')
-        self.Y.test = Y
-        self.score()
 
     def test(self):
         pass
