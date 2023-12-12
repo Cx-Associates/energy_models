@@ -4,7 +4,6 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OrdinalEncoder
 from sklearn.compose import ColumnTransformer
@@ -12,7 +11,7 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import cross_validate
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from .open_meteo import open_meteo_get
+from subrepos.energy_models.src.apis.open_meteo import open_meteo_get
 
 # for interactive plotting while debugging in PyCharm
 plt.interactive(True)
@@ -211,10 +210,21 @@ class Scores():
         self.fsu = None
 
 class Model():
-    """A child class of DataSet with attributes to use in modeling.
+    """Class intended for parameter modeling, e.g. energy modeling, based on time-series data, using conventions
+    like baseline period (sometimes divided into training and testing sets) and performance period. Reference ASHRAE
+    14, USDOE's Superior Energy Performance (SEP), and other guidelines for determining building or process
+    performance against some baseline period. Y is typically but not necessarily energy consumption.
+
+    Typically instantiated as one of the child classes, e.g. TOWT or TODT.
 
     """
     def __init__(self, data=None, **kwargs):
+        """
+
+        :param data: preferably a pandas.DataFrame, but can also be a list (e.g. a list of pd.series or
+        pd.dataframes), or any other type.
+        :param kwargs: will be made into attributes.
+        """
         self.reg = None  # or self.clf?
         self.X, self.Y, self.y = Var(), Var(), Var()
         self.scores = {}
@@ -290,10 +300,12 @@ class Model():
         self.time_frames = time_frames
 
     def join_weather_data(self, location=None, time_frame=None):
-        """
+        """Retrieves weather data from web service, joins it with self.dataframe, and returns the base series as
+        self.weather_data.
 
-        :param location:
-        :return:
+        :param location: tuple in format (lat, long)
+        :param time_frame: instance of TimeFrame object (see class)
+        :return: n/a
         """
         if location is None:
             location = self.location
@@ -328,7 +340,9 @@ class Model():
 
     def train(self):
         """Setting train and test arrays the same is acceptable for models that don't need to split train and test
-        sets, e.g. acceptable for ordinary least squares linear regression.
+        sets, e.g. acceptable for ordinary least squares linear regression. However, distinction between train and
+        test sets can apply if, for example, you want to exclude particular date ranges from the training set but
+        not the test set.
 
         :return:
         """
@@ -338,41 +352,70 @@ class Model():
                 X = self.X.data.truncate(before=before, after=after)
                 Y = self.Y.data.truncate(before=before, after=after)
             except KeyError:
-                print('!! No baseline period in time_frames attribute. Model will be trained on entire length of time.')
+                msg = f"!! No baseline period in time_frames attribute. Model will be trained on entire length of " \
+                      f"time in self.data attributes. \n Model object: {self} \n"
+                print(msg)
                 X, Y = self.X.data, self.Y.data
             # ToDo: prune X or Y to ensure they're same length
+            self.X.train, self.Y.train = X, Y
         else:
             X, Y = self.X.train, self.Y.train
         reg = LinearRegression().fit(X, Y)
         y_pred = reg.predict(X)
-        self.reg = reg
-        self.y.test = pd.Series(data=y_pred, index=Y.index, name='predicted')
-        self.Y.test, self.Y.train = Y, Y
-        self.X.test, self.X.train = X, X
-        self.score()
+        self.y.train = pd.Series(y_pred, index=Y.index, name='predicted')
 
-    def score(self):
+        # save regressor object as model attribute for making predictions later
+        self.reg = reg
+
+        # self.y.test = pd.Series(data=y_pred, index=Y.index, name='predicted')
+        # self.Y.test, self.Y.train = Y, Y
+        # self.X.test, self.X.train = X, X
+
+        # score training set metrics
+        self.score(on='train')
+
+    def test(self):
         """
 
         :return:
         """
+        if self.reg is None: # or self.clf is None:
+            msg = 'Model is being asked to test and has no reg or clf attribute. Need to train model before testing.'
+            raise Exception(msg)
+        if self.X.test is None:
+            self.X.test = self.X.data
+        y_pred = self.reg.predict(self.X.test)
+        self.y.test = pd.Series(y_pred, index=self.X.test.index, name='predicted')
+        self.Y.test = self.Y.data
+        #ToDo: improve this at all with indexing? Train-test-split to be addressed in child classes that use it
+
+    def score(self, on='test'):
+        """
+
+        :return:
+        """
+        Y, y = None, None
+        if on == 'train':
+            Y, y = self.Y.train, self.y.train
+        elif on == 'test':
+            Y, y = self.Y.test, self.y.test
         if self.frequency == 'hourly':
-            self.scores['hourly'] = Scores()
-            rsq = r2_score(self.Y.test, self.y.test)
-            self.scores['hourly'].rsq = rsq
-            mse = mean_squared_error(self.Y.test, self.y.test)
-            cvrmse = np.sqrt(mse) / np.mean(self.Y.test)
-            self.scores['hourly'].cvrmse = cvrmse
-            self.scores['hourly'].ndbe = (self.Y.test.sum() - self.y.test.sum()) / self.Y.test.sum()
-        Ytest_daily = self.Y.test.resample('d').mean()
-        ytest_daily = self.y.test.resample('d').mean()
-        self.scores['daily'] = Scores()
-        rsq_daily = r2_score(Ytest_daily, ytest_daily)
-        self.scores['daily'].rsq = rsq_daily
-        mse_daily = mean_squared_error(Ytest_daily, ytest_daily)
-        cvrmse_daily = np.sqrt(mse_daily) / np.mean(ytest_daily)
-        self.scores['daily'].cvrmse = cvrmse_daily
-        self.scores['daily'].ndbe = (Ytest_daily.sum() - ytest_daily.sum()) / Ytest_daily.sum()
+            self.scores[f'{on}_set_hourly'] = Scores()
+            rsq = r2_score(Y, y)
+            self.scores[f'{on}_set_hourly'].rsq = rsq
+            mse = mean_squared_error(Y, y)
+            cvrmse = np.sqrt(mse) / np.mean(Y)
+            self.scores[f'{on}_set_hourly'].cvrmse = cvrmse
+            self.scores[f'{on}_set_hourly'].ndbe = (Y.sum() - y.sum()) / Y.sum()
+        Y_daily = Y.resample('d').mean().dropna()
+        y_daily = y.resample('d').mean().dropna()
+        self.scores[f'{on}_set_daily'] = Scores()
+        rsq_daily = r2_score(Y_daily, y_daily)
+        self.scores[f'{on}_set_daily'].rsq = rsq_daily
+        mse_daily = mean_squared_error(Y_daily, y_daily)
+        cvrmse_daily = np.sqrt(mse_daily) / np.mean(y_daily)
+        self.scores[f'{on}_set_daily'].cvrmse = cvrmse_daily
+        self.scores[f'{on}_set_daily'].ndbe = (Y_daily.sum() - y_daily.sum()) / Y_daily.sum()
 
     def prediction_metrics(self):
         """
@@ -414,8 +457,10 @@ class Model():
             df = pd.concat([self.Y.test, self.y.test], axis=1)
             df.columns = ['actual', 'predicted']
         if weather == True:
-            df['OAT'] = self.dataframe['temperature_2m']
-            df.plot(alpha=alpha, grid=True, secondary_y='OAT')
+            # df['OAT'] = self.dataframe['temperature_2m']
+            df = pd.concat([df, self.weather_data], axis=1)
+            weather_name = self.weather_data.name
+            df.plot(alpha=alpha, grid=True, secondary_y=weather_name)
         else:
             df.plot(alpha=alpha, grid=True)
 
@@ -436,8 +481,6 @@ class Model():
         df.plot.bar(rot=90, grid=True)
 
 
-
-
     def check_zeroes(self):
         '''A function for checking % dependent variable zeros found in the performance period against same % of
         performance period, and flag if substantially different, or if either is substantially high. May indicate
@@ -453,6 +496,24 @@ class Model():
     def normalize(self):
         # function to reg.predict onto weather normalization data set
         pass
+
+    def add_exceptions(self, holidays=[], exceptions=[]):
+        '''Holidays will become an added binary factor, and exceptions will be dropped from training set.
+
+        :param holidays:
+        :param exceptions:
+        :return:
+        '''
+        from src.config import holidays_list, exceptions_list
+        holidays, exceptions = holidays_list, exceptions_list
+        X, Y = self.X.data, self.Y.data
+        X['holiday'] = 0.0
+        for holiday in holidays:
+            X['holiday'][holiday[0]:holiday[1]] = 1.0
+        for exception in exceptions:
+            X = X[(X.index < exception[0]) | (X.index > exception[1])]
+            Y = Y[(Y.index < exception[0]) | (Y.index > exception[1])]
+        self.X.data, self.Y.data = X, Y
 
 class TOWT(Model):
     """Class for performing time-of-week-and-temperature regression and storing results as class attributes.
@@ -474,7 +535,12 @@ class TOWT(Model):
         """
         pass
 
-    def add_TOWT_features(self, df, bins=6, temp_col='temperature_2m'):
+    def add_TOWT_features(
+            self,
+            df_=None,
+            bins=6,
+            temp_col='temperature_2m'
+    ):
         """Based on LBNL-4944E: Time of Week & Temperature Model outlined in Quantifying Changes in Building Electricity Use
         ... (2011, Mathieu et al). Given a time-series dataframe with outdoor air temperature column 'temp, this function
         returns dataframe with 168 columns with boolean (0 or 1) for each hour of the week, plus 6 binned temperature
@@ -486,6 +552,10 @@ class TOWT(Model):
         @return: (pandas.DataFrame) augmented with features as new columns. original temperature column is dropped.
         """
         # add time of week features
+        if df_ is None:
+            df = self.dataframe
+        else:
+            df = df_
         TOW = df.index.weekday * 24 + df.index.hour
         TOWdf = pd.DataFrame(0, columns=TOW.unique(), index=df.index)
         for index, row in TOWdf.iterrows():
@@ -558,12 +628,14 @@ class TOWT(Model):
             before = self.train_start
         if after is None:
             after = self.train_end
-        X_train = self.X.truncate(before=before, after=after)
-        Y_train = self.Y.truncate(before=before, after=after)
+        if self.X.train is None:
+            self.X.train = self.X.data
+        if self.Y.train is None:
+            self.Y.train = self.Y.data
+        X_train = self.X.train.truncate(before=before, after=after)
+        Y_train = self.Y.train.truncate(before=before, after=after)
         self.X.train = X_train
-        self.X.test = X_train
         self.Y.train = Y_train
-        self.Y.test = Y_train
 
     def run(self, on='train', start=None, end=None):
         X, bins = None, None
@@ -651,7 +723,7 @@ class TODT(Model):
             self,
             df_=None,
             bins=6,
-            temp_col=None
+            temp_col='temperature_2m'
     ):
         """See TODT class method. Similar but only uses 24 hour-wise time factors per day rather than 168 per week.
 
@@ -664,8 +736,6 @@ class TODT(Model):
             df = self.dataframe
         else:
             df = df_
-        if temp_col is None:
-            temp_col = self.X_col
         TOD = df.index.hour
         TODdf = pd.DataFrame(0.0, columns=TOD.unique(), index=df.index)
         for index, row in TODdf.iterrows():
@@ -734,29 +804,6 @@ class TODT(Model):
             self.dataframe = joined_df
         else:
             return joined_df
-
-
-    def add_exceptions(self, holidays=[], exceptions=[]):
-        '''Holidays will become an added binary factor, and exceptions will be dropped from training set.
-
-        :param holidays:
-        :param exceptions:
-        :return:
-        '''
-        from src.config import holidays_list, exceptions_list
-        holidays, exceptions = holidays_list, exceptions_list
-        X, Y = self.X.train, self.Y.train
-        X['holiday'] = 0.0
-        for holiday in holidays:
-            X[holiday[0]:holiday[1]] = 1.0
-        for exception in exceptions:
-            X = X[(X.index < exception[0]) | (X.index > exception[1])]
-            Y = Y[(X.index < exception[0]) | (X.index > exception[1])]
-        self.X.train, self.Y.train = X, Y
-
-
-    def test(self):
-        pass
 
 class SimpleOLS(Model):
     """
