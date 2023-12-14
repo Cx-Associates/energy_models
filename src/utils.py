@@ -450,10 +450,13 @@ class Model():
                  x='actual',
                  y='predicted',
                  weather=False,
+                 on='train',
                  alpha=.9):
         try:
             df = self.dataframe[[x, y]]
         except KeyError:
+            if on == 'train':
+
             df = pd.concat([self.Y.test, self.y.test], axis=1)
             df.columns = ['actual', 'predicted']
         if weather == True:
