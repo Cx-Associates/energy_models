@@ -236,6 +236,7 @@ class Model():
         self.weather_data = None
         self.data = None
         self.frequency = 'hourly'
+        self.report = {}
         if data is not None:
             if isinstance(data, pd.DataFrame):
                 self.dataframe = data
@@ -389,6 +390,23 @@ class Model():
         self.Y.test = self.Y.data
         #ToDo: improve this at all with indexing? Train-test-split to be addressed in child classes that use it
 
+    def predict(self, time_frame):
+        """
+
+        :param time_frame:
+        :return:
+        """
+        before, after = time_frame.tuple[0], time_frame.tuple[1]
+        if self.reg is None: # or self.clf is None:
+            msg = 'Model is being asked to test and has no reg or clf attribute. Need to train model before testing.'
+            raise Exception(msg)
+        if self.X.pred is None:
+            self.X.pred = self.X.data.truncate(before, after)
+            self.Y.pred = self.Y.data.truncate(before, after)
+            #ToDO: error-checking to make sure the lengths of X and Y are the same here
+        y_pred = self.reg.predict(self.X.pred)
+        self.y.pred = pd.Series(y_pred, index=self.X.pred.index, name='predicted')
+
     def score(self, on='test'):
         """
 
@@ -404,7 +422,8 @@ class Model():
             rsq = r2_score(Y, y)
             self.scores[f'{on}_set_hourly'].rsq = rsq
             mse = mean_squared_error(Y, y)
-            cvrmse = np.sqrt(mse) / np.mean(Y)
+            cvrmse = np.sqrt(mse) / np.mean(Y)  #ToDo: should the divisor be absolute value? how to handle Y with pos
+            # & neg values
             self.scores[f'{on}_set_hourly'].cvrmse = cvrmse
             self.scores[f'{on}_set_hourly'].ndbe = (Y.sum() - y.sum()) / Y.sum()
         Y_daily = Y.resample('d').mean().dropna()
@@ -433,55 +452,91 @@ class Model():
         self.scores.savings_uncertainty = U
         self.scores.fsu = U / (self.energy_savings)
 
+    def reporting_metrics(self):
+        """
+
+        :return:
+        """
+        self.report = {} #ToDo: get rid ofof this
+        self.report['y predicted'] = self.y.pred.sum()
+        self.report['Y actual'] = self.Y.pred.sum()
+        self.report['reduction'] = self.report['Y actual'] - self.report['y predicted']
+        self.report['pct reduction'] = self.report['reduction'] / self.report['y predicted']
+        self.report['trainset daily R-sq'] = self.scores['train_set_daily'].rsq
+        self.report['trainset daily CVRMSE'] = self.scores['train_set_daily'].cvrmse
+
+
     def scatterplot(self,
                     x='actual',
                     y='predicted',
+                    on='train',
                     alpha=.25):
         try:
-            df_scatter = self.dataframe[[x, y]]
+            df = self.dataframe[[x, y]]
         except KeyError:
-            df_scatter = pd.concat([self.Y.test, self.y.test], axis=1)
-            df_scatter.columns = ['actual', 'predicted']
-        ax = df_scatter.plot.scatter(x='actual', y='predicted', alpha=alpha, grid=True)
+            if on == 'train':
+                Y, y = self.Y.train, self.y.train
+            elif on == 'test':
+                Y, y = self.Y.test, self.y.test
+            df = pd.concat([Y, y], axis=1)
+            df.columns = ['actual', 'predicted']
+        ax = df.plot.scatter(x='actual', y='predicted', alpha=alpha, grid=True)
         plt.axline((0,0), slope=1, linestyle='--', color='gray')
         plt.show()
 
     def timeplot(self,
                  x='actual',
                  y='predicted',
-                 weather=False,
+                 weather_data=None,
                  on='train',
                  alpha=.9):
+        """
+
+        :param x:
+        :param y:
+        :param weather_data: (pd.Series) if not None, must be a Series with a name
+        :param on:
+        :param alpha:
+        :return:
+        """
         try:
             df = self.dataframe[[x, y]]
         except KeyError:
             if on == 'train':
-
-            df = pd.concat([self.Y.test, self.y.test], axis=1)
+                Y, y = self.Y.train, self.y.train
+            elif on == 'test':
+                Y, y = self.Y.test, self.y.test
+            df = pd.concat([Y, y], axis=1)
             df.columns = ['actual', 'predicted']
-        if weather == True:
-            # df['OAT'] = self.dataframe['temperature_2m']
-            df = pd.concat([df, self.weather_data], axis=1)
-            weather_name = self.weather_data.name
-            df.plot(alpha=alpha, grid=True, secondary_y=weather_name)
+        if weather_data is not None:
+            df = pd.concat([df, weather_data], axis=1)
+            df.plot(alpha=alpha, grid=True, secondary_y=weather_data.name)
         else:
             df.plot(alpha=alpha, grid=True)
 
     def dayplot(self,
                 x='actual',
                 y='predicted',
-                weather=False
+                on='train',
+                weather_data=None
                 ):
         try:
             df = self.dataframe[[x, y]]
         except KeyError:
-            df = pd.concat([self.Y.test, self.y.test], axis=1)
+            if on == 'train':
+                Y, y = self.Y.train, self.y.train
+            elif on == 'test':
+                Y, y = self.Y.test, self.y.test
+            df = pd.concat([Y, y], axis=1)
             df.columns = ['actual', 'predicted']
-        if weather == True:
-            df['OAT'] = self.dataframe['temperature_2m']
+        if weather_data is not None:
+            df = pd.concat([df, weather_data], axis=1)
         df = df.resample('d').mean()
         df.index = df.index.date
-        df.plot.bar(rot=90, grid=True)
+        if weather_data is not None:
+            df.plot.bar(rot=90, grid=True, secondary_y=weather_data.name)
+        else:
+            df.plot.bar(rot=90, grid=True)
 
 
     def check_zeroes(self):
