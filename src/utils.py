@@ -236,6 +236,8 @@ class Model():
         self.weather_data = None
         self.data = None
         self.frequency = 'hourly'
+        self.train_start = None
+        self.train_end = None
         if data is not None:
             if isinstance(data, pd.DataFrame):
                 self.dataframe = data
@@ -497,15 +499,14 @@ class Model():
         # function to reg.predict onto weather normalization data set
         pass
 
-    def add_exceptions(self, holidays=[], exceptions=[]):
+    def add_exceptions(self, holidays, exceptions):
         '''Holidays will become an added binary factor, and exceptions will be dropped from training set.
 
-        :param holidays:
-        :param exceptions:
+        :param holidays: (list)
+        :param exceptions: (list)
         :return:
         '''
-        from src.config import holidays_list, exceptions_list
-        holidays, exceptions = holidays_list, exceptions_list
+        holidays, exceptions = holidays, exceptions
         X, Y = self.X.data, self.Y.data
         X['holiday'] = 0.0
         for holiday in holidays:
