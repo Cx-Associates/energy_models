@@ -29,7 +29,7 @@ dir_data = os.path.join(dir_parent, 'data')
 
 
 def read_weather_data(filepath, colname, freq='h', irreg=False):
-    """
+    """Convenience function used to read weather data from a local file
 
     """
     try:
@@ -102,6 +102,30 @@ def get_projected_year(tmy, history, forecast=None):
     df[df.index == df_history.index] = df_history
 
     return df
+
+
+def safe_sum(df):
+    '''Calculates the sum of a timeseries array (dataframe or series) assuming any gaps in data are averages.
+    Otherwise, you might have missing data for a few intervals without realizing it, and then a sum over the whole
+    period would result in an artificially low value.
+
+    Result should be the same as df.sum() if there are no missing timestamps.
+
+    :param df: (pandas DataFrame or Series)
+    :return: (float) the sum of the dataframe's columns (or series values)
+    '''
+    freq = pd.infer_freq(df.index)
+    if not isinstance(freq, str):
+        msg = '**! Could not infer frequency of dataframe; assuming it is hourly. Any summation metrics should be ' \
+              'checked for accuracy. Dataframe header: \n \n'
+        print(msg + df.head())
+    range = df.index[-1] - df.index[0]
+    divisor = pd.Timedelta(1, freq)
+    len = range / divisor
+    avg = df.mean()
+    sum_ = len * avg
+
+    return sum_
 
 class TimeFrame():
     def __init__(self, arg):
@@ -210,18 +234,18 @@ class Scores():
         self.fsu = None
 
 class Model():
-    """Class intended for parameter modeling, e.g. energy modeling, based on time-series data, using conventions
+    """Class intended for parameter modeling, feature_engineering.g. energy modeling, based on time-series data, using conventions
     like baseline period (sometimes divided into training and testing sets) and performance period. Reference ASHRAE
     14, USDOE's Superior Energy Performance (SEP), and other guidelines for determining building or process
     performance against some baseline period. Y is typically but not necessarily energy consumption.
 
-    Typically instantiated as one of the child classes, e.g. TOWT or TODT.
+    Typically instantiated as one of the child classes, feature_engineering.g. TOWT or TODT.
 
     """
     def __init__(self, data=None, **kwargs):
         """
 
-        :param data: preferably a pandas.DataFrame, but can also be a list (e.g. a list of pd.series or
+        :param data: preferably a pandas.DataFrame, but can also be a list (feature_engineering.g. a list of pd.series or
         pd.dataframes), or any other type.
         :param kwargs: will be made into attributes.
         """
@@ -341,7 +365,7 @@ class Model():
 
     def train(self):
         """Setting train and test arrays the same is acceptable for models that don't need to split train and test
-        sets, e.g. acceptable for ordinary least squares linear regression. However, distinction between train and
+        sets, feature_engineering.g. acceptable for ordinary least squares linear regression. However, distinction between train and
         test sets can apply if, for example, you want to exclude particular date ranges from the training set but
         not the test set.
 
@@ -402,6 +426,10 @@ class Model():
             raise Exception(msg)
         if self.X.pred is None:
             self.X.pred = self.X.data.truncate(before, after)
+            if len(self.X.pred) == 0:
+                msg = f'Timeseries data between {before} and {after} not found in self.X.data. Please run a method ' \
+                      f'to fill self.X.data with data for this time period.'
+                raise AttributeError(msg)
             self.Y.pred = self.Y.data.truncate(before, after)
             #ToDO: error-checking to make sure the lengths of X and Y are the same here
         y_pred = self.reg.predict(self.X.pred)
@@ -452,18 +480,26 @@ class Model():
         self.scores.savings_uncertainty = U
         self.scores.fsu = U / (self.energy_savings)
 
-    def reporting_metrics(self):
+    def reporting_metrics(self, granularity='daily'):
         """
 
+        It's important to remember that sums should be calculated not using .sum() but as multiplying the .mean() by
+        the length of whatever array. This is to more properly represent sums over intervals where there are data
+        gaps or "outages"! NaNs are handled variously in this code and generally do not raise errors.
+
+        :param granularity: (str) - 'hourly' or 'daily'
         :return:
         """
-        self.report = {} #ToDo: get rid ofof this
-        self.report['y predicted'] = self.y.pred.sum()
-        self.report['Y actual'] = self.Y.pred.sum()
-        self.report['reduction'] = self.report['Y actual'] - self.report['y predicted']
-        self.report['pct reduction'] = self.report['reduction'] / self.report['y predicted']
-        self.report['trainset daily R-sq'] = self.scores['train_set_daily'].rsq
-        self.report['trainset daily CVRMSE'] = self.scores['train_set_daily'].cvrmse
+        if not granularity in ['hourly', 'daily']:
+            msg = "Granularity argument must be either 'hourly' or 'daily.'"
+            raise Exception(msg)
+        self.report = {} #ToDo: get rid of this
+        self.report['y_predicted'] = safe_sum(self.y.pred)
+        self.report['Y_actual'] = safe_sum(self.Y.pred)
+        self.report['reduction'] = self.report['Y_actual'] - self.report['y_predicted']
+        self.report['pct_reduction'] = self.report['reduction'] / self.report['y_predicted']
+        self.report['trainset_daily_Rsq'] = self.scores[f'train_set_{granularity}'].rsq
+        self.report['trainset_daily_CVRMSE'] = self.scores[f'train_set_{granularity}'].cvrmse
 
 
     def scatterplot(self,
@@ -739,6 +775,31 @@ class TOWT(Model):
         elif on == 'normalize':
             self.y.norm = y
 
+    def predict(self, time_frame):
+        """
+
+        :param time_frame:
+        :return:
+        """
+        before, after = time_frame.tuple[0], time_frame.tuple[1]
+        if self.reg is None: # or self.clf is None:
+            msg = 'Model is being asked to test and has no reg or clf attribute. Need to train model before testing.'
+            raise Exception(msg)
+        if self.X.pred is None:
+            self.X.pred = self.X.data.truncate(before, after)
+            if len(self.X.pred) == 0:
+                print(f'Requesting additional weather data from open meteo from {before} to {after} for model '
+                      f'prediction.')
+                s_weather = open_meteo_get(self.location, time_frame)
+                df_weather = pd.DataFrame(s_weather)
+                df = self.add_TOWT_features(df_weather)
+                self.X.pred = df
+        if self.Y.pred is not None:
+            self.Y.pred = self.Y.data.truncate(before, after)
+            #ToDO: error-checking to make sure the lengths of X and Y are the same here
+        y_pred = self.reg.predict(self.X.pred)
+        self.y.pred = pd.Series(y_pred, index=self.X.pred.index, name='predicted')
+
     def predict_recursive(self, X=None, Y=None):
         pass
 
@@ -854,14 +915,54 @@ class TODT(Model):
         dense_df = joined_df.dropna()
         na_df = df[~df.index.isin(dense_df.index)]
         if len(na_df > 0):
-            print(f'Dropped {len(na_df)} rows of NaN values from dataframe before storing X and Y values.')
+            print(f'Dropped {len(na_df)} rows of NaN values from dataframe before storing X and Y.')
             print(f'Dropped dataframe: \n {na_df}')
-        self.Y.data = dense_df[self.Y_col]
-        self.X.data = dense_df.drop(columns=self.Y_col)
+        try:
+            self.Y.data = dense_df[self.Y_col]
+            self.X.data = dense_df.drop(columns=self.Y_col)
+        except KeyError:
+            # This catches the case where the Y column was not passed into the model data (and allows function to
+            # proceed)
+            pass
         if df_ is None:
             self.dataframe = joined_df
         else:
             return joined_df
+
+    def predict(self, time_frame):
+        """Includes methods for
+
+        :param time_frame:
+        :return:
+        """
+        before, after = time_frame.tuple[0], time_frame.tuple[1]
+        if self.reg is None: # or self.clf is None:
+            msg = 'Model is being asked to test and has no reg or clf attribute. Need to train model before testing.'
+            raise Exception(msg)
+        if self.X.pred is None:
+            self.X.pred = self.X.data.truncate(before, after)
+            if len(self.X.pred) == 0:
+                print(f'Requesting additional weather data from open meteo from {before} to {after} for model '
+                      f'prediction. \n')
+                s_weather = open_meteo_get(self.location, time_frame.tuple)
+                df_weather = pd.DataFrame(s_weather)
+                df = self.add_TODT_features(df_weather)
+                self.X.pred = df
+        if self.Y.pred is not None:
+            Y_pred = self.Y.pred.truncate(before, after)
+        # resample Y to match X (or default to hourly if there is trouble)
+        freq = pd.infer_freq(self.X.pred.index)
+        if not isinstance(freq, str):
+            freq = 'H'
+        self.Y.pred = Y_pred.resample(freq).mean()
+        # error-checking to make sure the lengths of X and Y are the same here
+
+        # ensure column order of X.pred aligns with column order from the training set
+        self.X.pred = self.X.pred[list(self.reg.feature_names_in_)]
+        y_pred = self.reg.predict(self.X.pred)
+        self.y.pred = pd.Series(y_pred, index=self.X.pred.index, name='predicted')
+
+        #ToDo: refactor this to be packaged for both TODT and TOWT
 
 class SimpleOLS(Model):
     """

@@ -77,7 +77,10 @@ def open_meteo_get(
         url = forecast_url #ToDo: future-proof this whole function
     elif type(time_frame) == tuple:
         url = get_historic_url(location, time_frame, feature)
-
+    else:
+        msg = 'Error using open_meteo_get. Must pass either "forecast" or a tuple object (feature_engineering.g. (start_date, ' \
+              'end_date)) into the time_frame argument.'
+        raise Exception(msg)
     res = requests.get(url)
     if res.status_code != 200:
         msg = f"Couldn't complete Open-Meteo API weather request. \n {res.reason} \n {res.content}"
