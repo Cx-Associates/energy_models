@@ -415,7 +415,7 @@ class Model():
         #ToDo: improve this at all with indexing? Train-test-split to be addressed in child classes that use it
 
     def predict(self, time_frame):
-        """
+        """Includes methods for
 
         :param time_frame:
         :return:
@@ -427,13 +427,37 @@ class Model():
         if self.X.pred is None:
             self.X.pred = self.X.data.truncate(before, after)
             if len(self.X.pred) == 0:
-                msg = f'Timeseries data between {before} and {after} not found in self.X.data. Please run a method ' \
-                      f'to fill self.X.data with data for this time period.'
-                raise AttributeError(msg)
-            self.Y.pred = self.Y.data.truncate(before, after)
-            #ToDO: error-checking to make sure the lengths of X and Y are the same here
+                print(f'Requesting additional weather data from open meteo from {before} to {after} for model '
+                      f'prediction. \n')
+                s_weather = open_meteo_get(self.location, time_frame.tuple)
+                df_weather = pd.DataFrame(s_weather)
+                df = self.add_X_features(df_weather)
+                self.X.pred = df
+        if self.Y.pred is not None:
+            Y_pred = self.Y.pred.truncate(before, after)
+        # resample Y to match X (or default to hourly if there is trouble)
+        freq = pd.infer_freq(self.X.pred.index)
+        if not isinstance(freq, str):
+            freq = 'H'
+        self.Y.pred = Y_pred.resample(freq).mean()
+        # error-checking to make sure the lengths of X and Y are the same here
+
+        # ensure column order of X.pred aligns with column order from the training set
+        self.X.pred = self.X.pred[list(self.reg.feature_names_in_)]
         y_pred = self.reg.predict(self.X.pred)
         self.y.pred = pd.Series(y_pred, index=self.X.pred.index, name='predicted')
+
+        #ToDo: refactor this to be packaged for both TODT and TOWT
+
+    def add_X_features(self, df):
+        '''Just a placeholder method for the error message. This method relies on parameters defined at the child
+        level and as such can't have a definition at this level.
+
+        :return:
+        '''
+        msg = 'add_features method is not defined in this class. You must instantiate a child of this Model class (' \
+              'such as TODT or TOWT) in order to run add_features'
+        raise Exception(msg)
 
     def score(self, on='test'):
         """
@@ -629,9 +653,9 @@ class TOWT(Model):
         """
         pass
 
-    def add_TOWT_features(
+    def add_X_features(
             self,
-            df_=None,
+            df=None,
             bins=6,
             temp_col='temperature_2m'
     ):
@@ -646,10 +670,8 @@ class TOWT(Model):
         @return: (pandas.DataFrame) augmented with features as new columns. original temperature column is dropped.
         """
         # add time of week features
-        if df_ is None:
+        if df is None:
             df = self.dataframe
-        else:
-            df = df_
         TOW = df.index.weekday * 24 + df.index.hour
         TOWdf = pd.DataFrame(0, columns=TOW.unique(), index=df.index)
         for index, row in TOWdf.iterrows():
@@ -705,10 +727,17 @@ class TOWT(Model):
         if len(na_df > 0):
             print(f'Dropped {len(na_df)} rows of NaN values from dataframe before storing X and Y values.')
             print(f'Dropped dataframe: \n {na_df}')
-        self.Y.data = dense_df[self.Y_col]
-        self.X.data = dense_df.drop(columns=self.Y_col)
-
-        return joined_df
+        try:
+            self.Y.data = dense_df[self.Y_col]
+            self.X.data = dense_df.drop(columns=self.Y_col)
+        except KeyError:
+            # This catches the case where the Y column was not passed into the model data (and allows function to
+            # proceed)
+            pass
+        if df is None:
+            self.dataframe = joined_df
+        else:
+            return joined_df
 
     def truncate_baseline(self, before=None, after=None):
         """This is listed under the TOWT class here because not all models will use train and test sets as identical. Many model types should not.
@@ -746,7 +775,7 @@ class TOWT(Model):
         elif on == 'normalize':
             X = self.X.norm
             bins = 'from train'
-        X = self.add_TOWT_features(X, bins=bins)
+        X = self.add_X_features(X, bins=bins)
         if on in {'test', 'predict', 'normalize'}:
             X = X[self.X.train.columns]  # ToDo: raise error if perf period too short to have all week-hour factors
         if on == 'train':
@@ -774,31 +803,6 @@ class TOWT(Model):
             # self.annualized_savings = (y.mean() - Y.mean())*8760 #Todo: not how you do this
         elif on == 'normalize':
             self.y.norm = y
-
-    def predict(self, time_frame):
-        """
-
-        :param time_frame:
-        :return:
-        """
-        before, after = time_frame.tuple[0], time_frame.tuple[1]
-        if self.reg is None: # or self.clf is None:
-            msg = 'Model is being asked to test and has no reg or clf attribute. Need to train model before testing.'
-            raise Exception(msg)
-        if self.X.pred is None:
-            self.X.pred = self.X.data.truncate(before, after)
-            if len(self.X.pred) == 0:
-                print(f'Requesting additional weather data from open meteo from {before} to {after} for model '
-                      f'prediction.')
-                s_weather = open_meteo_get(self.location, time_frame)
-                df_weather = pd.DataFrame(s_weather)
-                df = self.add_TOWT_features(df_weather)
-                self.X.pred = df
-        if self.Y.pred is not None:
-            self.Y.pred = self.Y.data.truncate(before, after)
-            #ToDO: error-checking to make sure the lengths of X and Y are the same here
-        y_pred = self.reg.predict(self.X.pred)
-        self.y.pred = pd.Series(y_pred, index=self.X.pred.index, name='predicted')
 
     def predict_recursive(self, X=None, Y=None):
         pass
@@ -838,12 +842,13 @@ class TODT(Model):
         else:
             self.weekend = False
 
-    def add_TODT_features(
+    def add_X_features(
             self,
-            df_=None,
+            df=None,
             bins=6,
             temp_col='temperature_2m'
     ):
+        #ToDo: this method and add_X_features in TOWT might could be combined in the parent class to save some lines.
         """See TODT class method. Similar but only uses 24 hour-wise time factors per day rather than 168 per week.
 
         @param df: (pandas.DataFrame) must have datetime index and at least column 'temp'
@@ -851,10 +856,8 @@ class TODT(Model):
         @return: (pandas.DataFrame) augmented with features as new columns. original temperature column is dropped.
         """
         # add time of week features
-        if df_ is None:
+        if df is None:
             df = self.dataframe
-        else:
-            df = df_
         TOD = df.index.hour
         TODdf = pd.DataFrame(0.0, columns=TOD.unique(), index=df.index)
         for index, row in TODdf.iterrows():
@@ -921,48 +924,13 @@ class TODT(Model):
             self.Y.data = dense_df[self.Y_col]
             self.X.data = dense_df.drop(columns=self.Y_col)
         except KeyError:
-            # This catches the case where the Y column was not passed into the model data (and allows function to
-            # proceed)
+            # This catches the case where the Y column was not passed into the model data and simply allows function to
+            # proceed (because we don't need to drop the Y column if it wasn't passed into the model)
             pass
-        if df_ is None:
+        if df is None:
             self.dataframe = joined_df
         else:
             return joined_df
-
-    def predict(self, time_frame):
-        """Includes methods for
-
-        :param time_frame:
-        :return:
-        """
-        before, after = time_frame.tuple[0], time_frame.tuple[1]
-        if self.reg is None: # or self.clf is None:
-            msg = 'Model is being asked to test and has no reg or clf attribute. Need to train model before testing.'
-            raise Exception(msg)
-        if self.X.pred is None:
-            self.X.pred = self.X.data.truncate(before, after)
-            if len(self.X.pred) == 0:
-                print(f'Requesting additional weather data from open meteo from {before} to {after} for model '
-                      f'prediction. \n')
-                s_weather = open_meteo_get(self.location, time_frame.tuple)
-                df_weather = pd.DataFrame(s_weather)
-                df = self.add_TODT_features(df_weather)
-                self.X.pred = df
-        if self.Y.pred is not None:
-            Y_pred = self.Y.pred.truncate(before, after)
-        # resample Y to match X (or default to hourly if there is trouble)
-        freq = pd.infer_freq(self.X.pred.index)
-        if not isinstance(freq, str):
-            freq = 'H'
-        self.Y.pred = Y_pred.resample(freq).mean()
-        # error-checking to make sure the lengths of X and Y are the same here
-
-        # ensure column order of X.pred aligns with column order from the training set
-        self.X.pred = self.X.pred[list(self.reg.feature_names_in_)]
-        y_pred = self.reg.predict(self.X.pred)
-        self.y.pred = pd.Series(y_pred, index=self.X.pred.index, name='predicted')
-
-        #ToDo: refactor this to be packaged for both TODT and TOWT
 
 class SimpleOLS(Model):
     """
