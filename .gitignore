@@ -1,0 +1,4 @@
+../../src/env.yml
+config.yml
+*.pyc
+__pycache__/
